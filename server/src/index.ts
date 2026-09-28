@@ -138,11 +138,13 @@ async function syncConfiguredAccounts() {
       changed = true;
     }
     user.active = true;
-    if (changed || user.isModified()) {
-      await user.save();
-      console.log(`✓ ${role === 'owner' ? 'Owner' : 'Super Admin'} login ready: ${email}`);
-    }
+    if (changed || user.isModified()) await user.save();
+    console.log(`✓ ${role === 'owner' ? 'Owner' : 'Super Admin'} login ready: ${email}${changed ? ' (updated from environment)' : ''}`);
   };
+  const [users, admins, owners] = await Promise.all([User.countDocuments(), User.countDocuments({ role: 'superadmin' }), User.countDocuments({ role: 'owner' })]);
+  console.log(`ℹ  Accounts in database: ${users} total · ${admins} super admin · ${owners} owners`);
+  if (!envVal('SUPERADMIN_EMAIL') || !envVal('SUPERADMIN_PASSWORD')) console.log('ℹ  SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD not set — Super Admin login not synced.');
+  if (!envVal('OWNER_EMAIL') || !envVal('OWNER_PASSWORD')) console.log('ℹ  OWNER_EMAIL / OWNER_PASSWORD not set — owner login not synced.');
   await sync('superadmin', 'SUPERADMIN', 'admin@coachflow.in');
   await sync('owner', 'OWNER', 'owner@coachflow.in');
 }
