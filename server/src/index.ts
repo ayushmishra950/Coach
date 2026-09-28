@@ -86,32 +86,65 @@ async function main() {
     console.log('🌱 Empty database — seeding demo data…');
     await seed();
   }
-  await bootstrapSuperAdmin();
+  await syncConfiguredAccounts().catch((e) => console.error('[accounts]', e?.message));
   startReminderScheduler();
   const server = http.createServer(app);
   initRealtime(server);
   server.listen(config.port, () => console.log(`🚀 CoachFlow API running on http://localhost:${config.port} (time zone ${config.timezone})`));
 }
 
+/** Env value, trimmed, with accidental surrounding quotes removed. */
+const envVal = (k: string) => (process.env[k] ?? '').trim().replace(/^["']|["']$/g, '');
+
 /**
- * First deploy: creates the Super Admin from SUPERADMIN_EMAIL + SUPERADMIN_PASSWORD, but only
- * while no Super Admin exists yet. Later changes to these variables do nothing (change the
- * password from "My account" instead).
+ * Makes the logins given in the environment actually work, on every start:
+ *   SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD / SUPERADMIN_NAME
+ *   OWNER_EMAIL / OWNER_PASSWORD / OWNER_NAME   (owner of the demo institute)
+ * If the account exists its password is set to the configured one. If it doesn't, the demo
+ * account (admin@coachflow.in / owner@coachflow.in) is renamed to it, or a Super Admin is
+ * created. Remove these variables once you have changed the passwords from "My account",
+ * otherwise a restart puts the configured password back.
  */
-async function bootstrapSuperAdmin() {
-  const email = process.env.SUPERADMIN_EMAIL?.trim().toLowerCase();
-  const password = process.env.SUPERADMIN_PASSWORD ?? '';
-  if (!email || (await User.exists({ role: 'superadmin' }))) return;
-  if (password.length < 8) {
-    console.warn('⚠  SUPERADMIN_PASSWORD must be at least 8 characters — Super Admin not created.');
-    return;
-  }
-  if (await User.exists({ email })) {
-    console.warn(`⚠  ${email} is already used by another account — Super Admin not created.`);
-    return;
-  }
-  await User.create({ name: process.env.SUPERADMIN_NAME?.trim() || 'CoachFlow Admin', email, password: await bcrypt.hash(password, 10), role: 'superadmin' });
-  console.log(`✓ Super Admin created: ${email}`);
+async function syncConfiguredAccounts() {
+  const sync = async (role: 'superadmin' | 'owner', prefix: 'SUPERADMIN' | 'OWNER', demoEmail: string) => {
+    const email = envVal(`${prefix}_EMAIL`).toLowerCase();
+    const password = envVal(`${prefix}_PASSWORD`);
+    const name = envVal(`${prefix}_NAME`);
+    if (!email || !password) return;
+    if (password.length < 8) return console.warn(`⚠  ${prefix}_PASSWORD must be at least 8 characters — ${email} not updated.`);
+
+    let user = await User.findOne({ email }).select('+password');
+    if (user && user.role !== role) return console.warn(`⚠  ${email} belongs to a ${user.role} account — not changed.`);
+    if (!user) {
+      // Take over the demo account (keeps the demo institute and all its data).
+      user = await User.findOne({ email: demoEmail, role }).select('+password');
+      if (!user && role === 'owner') {
+        return console.warn(`⚠  No owner account ${email} (or ${demoEmail}) found — set OWNER_* before the demo data is created, or create the institute by registering.`);
+      }
+      if (!user) {
+        await User.create({ name: name || 'CoachFlow Admin', email, password: await bcrypt.hash(password, 10), role });
+        return console.log(`✓ Super Admin created: ${email}`);
+      }
+      user.email = email;
+    }
+    let changed = user.isModified('email');
+    if (name && user.name !== name) {
+      user.name = name;
+      changed = true;
+    }
+    if (!(await bcrypt.compare(password, user.password))) {
+      user.password = await bcrypt.hash(password, 10);
+      user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+      changed = true;
+    }
+    user.active = true;
+    if (changed || user.isModified()) {
+      await user.save();
+      console.log(`✓ ${role === 'owner' ? 'Owner' : 'Super Admin'} login ready: ${email}`);
+    }
+  };
+  await sync('superadmin', 'SUPERADMIN', 'admin@coachflow.in');
+  await sync('owner', 'OWNER', 'owner@coachflow.in');
 }
 
 main().catch((e) => {

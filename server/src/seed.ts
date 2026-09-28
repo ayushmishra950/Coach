@@ -25,7 +25,7 @@ const phone = () => '9' + String(between(100000000, 999999999));
  * environment (never in code) — otherwise the public demo logins are used.
  */
 function seedAccounts() {
-  const env = (k: string) => process.env[k]?.trim() || '';
+  const env = (k: string) => (process.env[k] ?? '').trim().replace(/^["']|["']$/g, '');
   return {
     admin: {
       name: env('SUPERADMIN_NAME') || 'CoachFlow Admin',
