@@ -18,6 +18,8 @@ const attendanceSchema = new Schema(
 );
 attendanceSchema.index({ batchId: 1, date: 1 }, { unique: true });
 attendanceSchema.index({ instituteId: 1, date: 1 });
+// Per-student lookups (profile, parent portal, attendance %) without scanning the whole history.
+attendanceSchema.index({ instituteId: 1, 'records.studentId': 1, date: -1 });
 
 export type AttendanceT = InferSchemaType<typeof attendanceSchema>;
 export const Attendance = model('Attendance', attendanceSchema);

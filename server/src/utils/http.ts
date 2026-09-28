@@ -29,12 +29,32 @@ export function errorHandler(err: any, _req: Request, res: Response, _next: Next
     return res.status(err.status).json({ message: err.message, code: err.code, ...err.extra });
   }
   if (err?.code === 11000) {
-    const field = Object.keys(err.keyValue || {})[0] || 'field';
-    return res.status(409).json({ message: `A record with this ${field} already exists` });
+    // Compound indexes start with instituteId — name the field the user actually typed.
+    const keys = Object.keys(err.keyValue || {}).filter((k) => k !== 'instituteId');
+    const field = keys[0] || 'value';
+    const label: Record<string, string> = { studentCode: 'student code', email: 'email', receiptNo: 'receipt number', key: 'key' };
+    const val = err.keyValue?.[field];
+    return res.status(409).json({ message: `A record with this ${label[field] ?? field}${typeof val === 'string' ? ` (${val})` : ''} already exists` });
+  }
+  if (err instanceof mongoose.Error.CastError) {
+    return res.status(400).json({ message: `Invalid value for ${err.path}` });
+  }
+  if (err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ message: 'Invalid request body' });
+  }
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ message: 'That upload is too large. Please split it into smaller parts.' });
+  }
+  if (typeof err?.status === 'number' && err.status >= 400 && err.status < 500 && err.expose) {
+    return res.status(err.status).json({ message: err.message });
   }
   if (err instanceof mongoose.Error.ValidationError) {
     return res.status(400).json({ message: Object.values(err.errors).map((e) => e.message).join(', ') });
   }
-  console.error(err);
+  // Log the error itself, never the request body (it can contain phone numbers, marks, passwords).
+  console.error('[error]', err?.name, err?.message, err?.stack?.split('\n').slice(1, 4).join(' | '));
   res.status(500).json({ message: 'Something went wrong' });
 }
+
+/** A query-string / body value as a plain string (anything else → undefined). */
+export const str = (v: unknown) => (typeof v === 'string' ? v : undefined);

@@ -1,9 +1,13 @@
 import { Router } from 'express';
-import { allow, auth, requireFeature, tid } from '../middleware/auth.js';
+import { allow, assertStudentAccess, auth, requireFeature, tid } from '../middleware/auth.js';
 import { Batch, Student, Test } from '../models/index.js';
 import { inr } from '../services/payments.js';
 import { attendanceByStudent, feesByStudent, scoresByStudent } from '../services/stats.js';
+import { instituteMemo } from '../utils/cache.js';
 import { HttpError, ah, oid } from '../utils/http.js';
+
+// Insights are advisory; recompute at most every 10 minutes, or sooner when data changes.
+const memo = instituteMemo<unknown>(10 * 60_000);
 
 /**
  * AI Insights. Ships with a deterministic rule engine so it works offline; the
@@ -11,20 +15,30 @@ import { HttpError, ah, oid } from '../utils/http.js';
  * structured findings into richer narrative.
  */
 const r = Router();
-r.use(auth, allow('owner', 'teacher'), requireFeature('aiInsights'));
+// Owner only: insights include fee dues and institute-wide performance.
+r.use(auth, allow('owner'), requireFeature('aiInsights'));
 
 r.get(
   '/',
   ah(async (req, res) => {
     const instituteId = tid(req);
+    res.json(await memo(instituteId, 'insights', () => computeInsights(instituteId)));
+  }),
+);
+
+async function computeInsights(instituteId: ReturnType<typeof tid>) {
+  {
     const students = await Student.find({ instituteId, status: 'active' }).select('name studentCode batchIds').lean();
     const ids = students.map((s) => s._id);
     const [att, scores, fees, tests, batches] = await Promise.all([
       attendanceByStudent(instituteId, ids),
       scoresByStudent(instituteId, ids),
       feesByStudent(instituteId, ids),
-      Test.find({ instituteId, status: { $ne: 'scheduled' } }).sort({ date: 1 }).lean(),
-      Batch.find({ instituteId, active: true }).populate('teacherId', 'name').lean(),
+      Test.find({ instituteId, status: { $ne: 'scheduled' } })
+        .select('batchId subject topic maxMarks date results.studentId results.marks results.absent')
+        .sort({ date: 1, _id: 1 })
+        .lean(),
+      Batch.find({ instituteId, active: true }).select('name teacherId').populate('teacherId', 'name').lean(),
     ]);
 
     // 1. At-risk students
@@ -53,12 +67,13 @@ r.get(
       .sort((a, b) => b.risk - a.risk)
       .slice(0, 12);
 
+    const batchById = new Map(batches.map((b) => [String(b._id), b]));
     // 2. Weak topics
     const weakTopics = tests
       .map((t) => {
         const v = t.results.filter((x) => !x.absent && x.marks != null);
         const avg = v.length ? Math.round((v.reduce((s, x) => s + (x.marks as number), 0) / (v.length * t.maxMarks)) * 100) : null;
-        const batch = batches.find((b) => String(b._id) === String(t.batchId));
+        const batch = batchById.get(String(t.batchId));
         return { testId: t._id, subject: t.subject, topic: t.topic || t.subject, batch: batch?.name, avg, below40: v.filter((x) => ((x.marks as number) / t.maxMarks) * 100 < 40).length };
       })
       .filter((t) => t.avg != null && t.avg < 65)
@@ -66,11 +81,21 @@ r.get(
       .slice(0, 8);
 
     // 3. Improving / declining students (last test vs their earlier average)
+    // One pass over all results builds each student's score series (tests are date-sorted),
+    // instead of scanning every test for every student.
+    const seriesBy = new Map<string, number[]>();
+    for (const t of tests) {
+      for (const x of t.results) {
+        if (x.absent || x.marks == null) continue;
+        const k = String(x.studentId);
+        let arr = seriesBy.get(k);
+        if (!arr) seriesBy.set(k, (arr = []));
+        arr.push(((x.marks as number) / t.maxMarks) * 100);
+      }
+    }
     const trend: { name: string; delta: number; last: number; before: number }[] = [];
     for (const s of students) {
-      const series = tests
-        .flatMap((t) => t.results.filter((x) => String(x.studentId) === String(s._id) && !x.absent && x.marks != null).map((x) => ((x.marks as number) / t.maxMarks) * 100))
-        .filter((x) => !Number.isNaN(x));
+      const series = seriesBy.get(String(s._id)) ?? [];
       if (series.length < 3) continue;
       const last = series[series.length - 1];
       const before = series.slice(0, -1).reduce((a, b) => a + b, 0) / (series.length - 1);
@@ -80,8 +105,14 @@ r.get(
     const declining = trend.filter((x) => x.delta <= -8).sort((a, b) => a.delta - b.delta).slice(0, 5);
 
     // 4. Teacher / batch insights
+    const membersBy = new Map<string, typeof students>();
+    for (const s of students) for (const b of s.batchIds) {
+      const k = String(b);
+      if (!membersBy.has(k)) membersBy.set(k, []);
+      membersBy.get(k)!.push(s);
+    }
     const teacherInsights = batches.map((b) => {
-      const members = students.filter((s) => s.batchIds.some((x) => String(x) === String(b._id)));
+      const members = membersBy.get(String(b._id)) ?? [];
       const atts = members.map((m) => att.get(String(m._id))?.pct).filter((x): x is number => x != null);
       const scs = members.map((m) => scores.get(String(m._id))?.avg).filter((x): x is number => x != null);
       return {
@@ -99,35 +130,37 @@ r.get(
       improving[0] ? `${improving[0].name} improved by ${improving[0].delta} points in the latest test.` : null,
     ].filter(Boolean);
 
-    res.json({ generatedAt: new Date(), engine: 'rules-v1', headline, atRisk, weakTopics, improving, declining, teacherInsights });
-  }),
-);
+    return { generatedAt: new Date(), engine: 'rules-v1', headline, atRisk, weakTopics, improving, declining, teacherInsights };
+  }
+}
 
 /** Parent-friendly progress report for one student. */
 r.get(
   '/student/:id',
   ah(async (req, res) => {
     const instituteId = tid(req);
+    await assertStudentAccess(req, oid(req.params.id));
     const s = await Student.findOne({ _id: oid(req.params.id), instituteId }).populate('batchIds', 'name').lean();
     if (!s) throw new HttpError(404, 'Student not found');
-    const [att, sc, fees, tests] = await Promise.all([
+    const [att, fees, tests] = await Promise.all([
       attendanceByStudent(instituteId, [s._id]),
-      scoresByStudent(instituteId, [s._id]),
       feesByStudent(instituteId, [s._id]),
-      Test.find({ instituteId, 'results.studentId': s._id, status: { $ne: 'scheduled' } }).lean(),
+      // Parent-facing: only results the institute has published.
+      Test.find({ instituteId, 'results.studentId': s._id, status: 'published' }).select('subject maxMarks results').lean(),
     ]);
     const a = att.get(String(s._id));
-    const avg = sc.get(String(s._id))?.avg;
     const subj: Record<string, number[]> = {};
     for (const t of tests) {
       const x = t.results.find((y) => String(y.studentId) === String(s._id));
       if (x && !x.absent && x.marks != null) (subj[t.subject] ??= []).push((x.marks / t.maxMarks) * 100);
     }
+    const allPct = Object.values(subj).flat();
+    const avg = allPct.length ? Math.round(allPct.reduce((x, y) => x + y, 0) / allPct.length) : null;
     const ranked = Object.entries(subj).map(([k, v]) => ({ subject: k, avg: Math.round(v.reduce((a, b) => a + b, 0) / v.length) })).sort((x, y) => y.avg - x.avg);
     const first = s.name.split(' ')[0];
     const parts = [
       `${first} has attended ${a?.pct ?? 0}% of classes${a && a.pct >= 90 ? ', which is excellent' : a && a.pct < 75 ? ' — regular attendance needs improvement' : ''}.`,
-      avg != null ? `Across ${sc.get(String(s._id))?.count} tests the average score is ${avg}%.` : 'No test results are available yet.',
+      avg != null ? `Across ${allPct.length} published tests the average score is ${avg}%.` : 'No test results are available yet.',
       ranked[0] ? `Strongest subject: ${ranked[0].subject} (${ranked[0].avg}%).` : '',
       ranked.length > 1 ? `Needs more practice in ${ranked[ranked.length - 1].subject} (${ranked[ranked.length - 1].avg}%).` : '',
       fees.get(String(s._id))?.pending ? `Pending fees: ${inr(fees.get(String(s._id))!.pending)}.` : 'All fees are clear.',

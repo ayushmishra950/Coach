@@ -3,9 +3,10 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Badge, Button, Card, EmptyState, ErrorState, Input, Modal, PageHeader, Progress, Select, Skeleton, StatusBadge, Tabs, clsx,
+  Badge, Button, Card, EmptyState, ErrorState, Input, Modal, PageHeader, Progress, Select, Skeleton, StatusBadge, Tabs, Toggle, clsx,
 } from '../../components/ui';
-import { useApi } from '../../hooks/useApi';
+import { useApi, usePagedApi } from '../../hooks/useApi';
+import { Pager } from '../../components/Pager';
 import { api, errMsg } from '../../lib/api';
 import { fmtDate, pctTone, ymd } from '../../lib/format';
 import type { Batch, BatchRef, TestItem } from '../../lib/types';
@@ -33,25 +34,34 @@ export default function Tests() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const batches = useApi<Batch[]>('/batches');
-  const { data, loading, error, reload } = useApi<TestItem[]>('/tests', { batchId: batchId || undefined });
+  const batches = useApi<Batch[]>('/batches/options');
+  // Status filtering is done by the server; 20 tests per page, newest first.
+  const { data, loading, error, reload, pager } = usePagedApi<TestItem>('/tests', { batchId: batchId || undefined, status });
+  // First page of scheduled tests: gives the "Scheduled" count and the tests awaiting marks.
+  const scheduled = usePagedApi<TestItem>('/tests', { batchId: batchId || undefined, status: 'scheduled' });
 
   const counts = useMemo(() => {
-    const c: Record<StatusKey, number> = { all: 0, scheduled: 0, graded: 0, published: 0 };
-    for (const t of data ?? []) {
-      c.all++;
-      c[t.status]++;
-    }
+    const c: Partial<Record<StatusKey, number>> = {};
+    if (scheduled.data) c.scheduled = scheduled.data.total;
+    if (data) c[status] = data.total;
     return c;
-  }, [data]);
+  }, [data, status, scheduled.data]);
 
   const list = useMemo(() => {
-    const rows = (data ?? []).filter((t) => status === 'all' || t.status === status);
-    // Tests needing marks float to the top
+    const rows = data?.items ?? [];
+    // Tests needing marks float to the top (within this page)
     return [...rows].sort((a, b) => Number(needsMarks(b)) - Number(needsMarks(a)));
-  }, [data, status]);
+  }, [data]);
 
-  const pendingMarks = (data ?? []).filter(needsMarks).length;
+  // Scheduled tests come newest first, so upcoming ones precede the conducted ones: once page 1
+  // reaches a conducted test, every scheduled test after the upcoming ones is awaiting marks.
+  const pendingMarks = useMemo(() => {
+    const sd = scheduled.data;
+    if (!sd) return 0;
+    const upcoming = sd.items.filter((t) => !needsMarks(t)).length;
+    if (sd.pages > 1 && upcoming === sd.items.length) return 0; // can't tell from the first page
+    return Math.max(0, sd.total - upcoming);
+  }, [scheduled.data]);
 
   return (
     <div>
@@ -95,9 +105,12 @@ export default function Tests() {
             action={<Button icon={<Plus className="h-4 w-4" />} onClick={() => setCreateOpen(true)}>Create test</Button>} />
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {list.map((t) => <TestCard key={t._id} t={t} onClick={() => navigate(`/app/tests/${t._id}`)} />)}
-        </div>
+        <>
+          <div className={clsx('grid gap-4 md:grid-cols-2 xl:grid-cols-3', loading && 'opacity-60')}>
+            {list.map((t) => <TestCard key={t._id} t={t} onClick={() => navigate(`/app/tests/${t._id}`)} />)}
+          </div>
+          {pager && <Card pad={false} className="mt-4 overflow-hidden"><Pager {...pager} noun="tests" /></Card>}
+        </>
       )}
 
       <TestFormModal
@@ -171,7 +184,7 @@ function Metric({ label, value, className }: { label: string; value: string; cla
 /** Create / edit test modal — shared with TestDetail. */
 export function TestFormModal({ open, onClose, batches, presetBatchId, initial, onSaved }: {
   open: boolean; onClose: () => void; batches: Batch[]; presetBatchId?: string;
-  initial?: { _id: string; subject: string; topic?: string; maxMarks: number; date: string; batchId: string };
+  initial?: { _id: string; subject: string; topic?: string; maxMarks: number; date: string; batchId: string; passPercent?: number; negativeMarking?: boolean };
   onSaved: (id: string) => void;
 }) {
   const editing = !!initial;
@@ -180,6 +193,8 @@ export function TestFormModal({ open, onClose, batches, presetBatchId, initial, 
   const [topic, setTopic] = useState('');
   const [maxMarks, setMaxMarks] = useState('50');
   const [date, setDate] = useState(ymd());
+  const [passPercent, setPassPercent] = useState('40');
+  const [negativeMarking, setNegativeMarking] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -190,6 +205,8 @@ export function TestFormModal({ open, onClose, batches, presetBatchId, initial, 
       setTopic(initial.topic ?? '');
       setMaxMarks(String(initial.maxMarks));
       setDate(ymd(new Date(initial.date)));
+      setPassPercent(String(initial.passPercent ?? 40));
+      setNegativeMarking(!!initial.negativeMarking);
     } else {
       const b = batches.find((x) => x._id === presetBatchId) ?? null;
       setBatchId(b?._id ?? '');
@@ -197,9 +214,19 @@ export function TestFormModal({ open, onClose, batches, presetBatchId, initial, 
       setTopic('');
       setMaxMarks('50');
       setDate(ymd());
+      setPassPercent('40');
+      setNegativeMarking(false);
     }
+    // Reset only when the modal opens (or what it edits changes) — not when the batch list loads later.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initial?._id, presetBatchId, batches.length]);
+  }, [open, initial?._id, presetBatchId]);
+
+  // Batches arrived after the modal opened: fill in the preset batch if none is chosen yet, touch nothing else.
+  useEffect(() => {
+    if (!open || initial || batchId || !presetBatchId) return;
+    if (batches.some((x) => x._id === presetBatchId)) setBatchId(presetBatchId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batches.length]);
 
   const pickBatch = (id: string) => {
     const prev = batches.find((x) => x._id === batchId);
@@ -212,8 +239,10 @@ export function TestFormModal({ open, onClose, batches, presetBatchId, initial, 
     if (!batchId) return toast.error('Select a batch');
     if (!subject.trim()) return toast.error('Enter the subject');
     if (!(Number(maxMarks) > 0)) return toast.error('Enter valid maximum marks');
+    const pp = passPercent.trim() === '' ? 40 : Number(passPercent);
+    if (!Number.isFinite(pp) || pp < 0 || pp > 100) return toast.error('Pass mark must be between 0% and 100%');
     setSaving(true);
-    const body = { batchId, subject: subject.trim(), topic: topic.trim(), maxMarks: Number(maxMarks), date };
+    const body = { ...(editing ? {} : { batchId }), subject: subject.trim(), topic: topic.trim(), maxMarks: Number(maxMarks), date, passPercent: pp, negativeMarking };
     try {
       const { data } = editing ? await api.put<{ _id: string }>(`/tests/${initial!._id}`, body) : await api.post<{ _id: string }>('/tests', body);
       toast.success(editing ? 'Test updated' : 'Test created');
@@ -238,6 +267,10 @@ export function TestFormModal({ open, onClose, batches, presetBatchId, initial, 
         <Input label="Topic" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. Quadratic Equations" />
         <Input label="Max marks" type="number" min={1} value={maxMarks} onChange={(e) => setMaxMarks(e.target.value)} />
         <Input label="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <Input label="Pass mark %" type="number" min={0} max={100} value={passPercent} onChange={(e) => setPassPercent(e.target.value)} hint="Students below this percentage are marked as fail" />
+        <div className="flex items-center sm:pt-6">
+          <Toggle checked={negativeMarking} onChange={setNegativeMarking} label="Negative marking" description="Allow marks below zero" />
+        </div>
       </div>
       {!editing && (
         <p className="mt-4 flex items-center gap-2 rounded-xl bg-brand-50 px-3 py-2 text-xs text-brand-700">

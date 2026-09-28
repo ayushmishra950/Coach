@@ -8,8 +8,18 @@ export function inrShort(n: number) {
   return inr(n);
 }
 
+/** Parse a date-only 'YYYY-MM-DD' string as a LOCAL date (new Date('YYYY-MM-DD') is UTC midnight). */
+export function parseYmd(s: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return new Date(s);
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+/** Date from a Date, ISO timestamp, or date-only string (date-only parsed as local). */
+export const toDate = (d: string | Date) => (typeof d === 'string' ? parseYmd(d) : new Date(d));
+
 export const fmtDate = (d?: string | Date | null, opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' }) =>
-  d ? new Date(d).toLocaleDateString('en-IN', opts) : '—';
+  d ? toDate(d).toLocaleDateString('en-IN', opts) : '—';
 
 export const fmtDateShort = (d?: string | Date | null) => fmtDate(d, { day: 'numeric', month: 'short' });
 
@@ -57,10 +67,15 @@ export const pctTone = (p?: number | null) =>
   p == null ? 'text-slate-400' : p >= 85 ? 'text-emerald-600' : p >= 70 ? 'text-amber-600' : 'text-rose-600';
 
 export function downloadCSV(filename: string, rows: Record<string, unknown>[]) {
-  if (!rows.length) return;
+  if (!rows.length) {
+    import('react-hot-toast').then(({ default: toast }) => toast('Nothing to export'));
+    return;
+  }
   const headers = Object.keys(rows[0]);
   const esc = (v: unknown) => {
-    const s = v == null ? '' : String(v);
+    let s = v == null ? '' : String(v);
+    // A cell starting with = + - @ would run as a formula in Excel / Sheets — prefix a quote.
+    if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s) && !/^\+?[\d\s-]{6,}$/.test(s)) s = `'${s}`;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const csv = [headers.join(','), ...rows.map((r) => headers.map((h) => esc(r[h])).join(','))].join('\n');

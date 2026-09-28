@@ -1,6 +1,6 @@
 import {
   ArrowDownRight, ArrowUpRight, CalendarClock, Check, CheckCircle2, Crown, CreditCard, GraduationCap, LifeBuoy, Lock, Plus, Receipt,
-  ShieldCheck, Sparkles, UserSquare2,
+  MessageSquare, RotateCcw, ShieldCheck, Sparkles, UserSquare2,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import toast from 'react-hot-toast';
@@ -9,7 +9,8 @@ import {
   StatusBadge, Textarea, clsx,
 } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
-import { useApi } from '../../hooks/useApi';
+import { Pager } from '../../components/Pager';
+import { useApi, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
 import { FEATURE_INFO } from '../../lib/features';
 import { fmtDate, fmtDateTime, inr, timeAgo } from '../../lib/format';
@@ -19,8 +20,8 @@ type Cycle = 'monthly' | 'yearly';
 interface SubPayment { _id: string; plan: PlanKey; cycle: Cycle; amount: number; status: 'success' | 'failed' | 'refunded'; reference?: string; failureReason?: string; createdAt: string }
 interface SubData {
   plan: PlanKey; effectivePlan: PlanKey; status: 'trial' | 'active' | 'past_due' | 'cancelled' | 'suspended'; billingCycle: Cycle;
-  trialEndsAt?: string; trialDaysLeft: number | null; currentPeriodEnd?: string;
-  usage: { students: number; teachers: number }; plans: Plan[]; history: SubPayment[];
+  trialEndsAt?: string; trialDaysLeft: number | null; currentPeriodEnd?: string; cancelAtPeriodEnd?: boolean;
+  usage: { students: number; teachers: number }; plans: Plan[]; history: SubPayment[]; paymentsEnabled?: boolean;
 }
 interface Ticket { _id: string; subject: string; message: string; priority: 'low' | 'normal' | 'high'; status: 'open' | 'in_progress' | 'resolved'; replies: { by: string; text: string; at: string }[]; createdAt: string }
 
@@ -49,7 +50,7 @@ function UsageBar({ icon, label, used, limit }: { icon: ReactNode; label: string
 export default function Subscription() {
   const { refresh } = useAuth();
   const { data, loading, error, reload } = useApi<SubData>('/subscription');
-  const tickets = useApi<Ticket[]>('/subscription/tickets');
+  const tickets = usePagedApi<Ticket>('/subscription/tickets');
   const [cycle, setCycle] = useState<Cycle | null>(null);
   const [checkout, setCheckout] = useState<Plan | null>(null);
   const [paying, setPaying] = useState(false);
@@ -59,6 +60,7 @@ export default function Subscription() {
   const [ticketOpen, setTicketOpen] = useState(false);
   const [ticket, setTicket] = useState({ subject: '', message: '', priority: 'normal' });
   const [savingTicket, setSavingTicket] = useState(false);
+  const [resuming, setResuming] = useState(false);
 
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (loading || !data) {
@@ -76,6 +78,12 @@ export default function Subscription() {
   const currentIdx = data.plans.findIndex((p) => p.key === data.plan);
   const isTrial = data.status === 'trial';
   const isCancelled = data.status === 'cancelled';
+  const isPastDue = data.status === 'past_due';
+  // Trial, cancelled and overdue institutes all have to pay — even for the plan they are already on.
+  const mustPay = isTrial || isCancelled || isPastDue;
+  const cancelScheduled = !!data.cancelAtPeriodEnd && !isCancelled;
+  // A paid period keeps running until its end when cancelled; a trial (nothing paid) stops immediately.
+  const paidPeriod = (data.status === 'active' || data.status === 'past_due') && !!data.currentPeriodEnd && new Date(data.currentPeriodEnd) > new Date();
 
   const openCheckout = (p: Plan) => { setSuccess(null); setCheckout(p); };
   const closeCheckout = () => { if (!paying) { setCheckout(null); setSuccess(null); } };
@@ -97,14 +105,27 @@ export default function Subscription() {
   const cancel = async () => {
     setCancelling(true);
     try {
-      await api.post('/subscription/cancel');
-      toast.success('Subscription cancelled');
+      const { data: res } = await api.post<{ cancelAtPeriodEnd: boolean; currentPeriodEnd?: string }>('/subscription/cancel');
+      toast.success(res.cancelAtPeriodEnd ? `Cancellation scheduled — you keep access until ${fmtDate(res.currentPeriodEnd)}` : 'Subscription cancelled');
       setCancelOpen(false);
       await Promise.all([refresh(), reload()]);
     } catch (e) {
       toast.error(errMsg(e));
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const resume = async () => {
+    setResuming(true);
+    try {
+      await api.post('/subscription/resume');
+      toast.success('Your plan will continue as normal');
+      await Promise.all([refresh(), reload()]);
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setResuming(false);
     }
   };
 
@@ -116,7 +137,9 @@ export default function Subscription() {
       toast.success('Ticket raised — our team will reply soon');
       setTicketOpen(false);
       setTicket({ subject: '', message: '', priority: 'normal' });
-      tickets.reload();
+      // Newest tickets come first: show page 1 so the new ticket is visible.
+      if (tickets.page === 1) tickets.reload();
+      else tickets.setPage(1);
     } catch (e) {
       toast.error(errMsg(e));
     } finally {
@@ -130,6 +153,12 @@ export default function Subscription() {
     <div className="animate-fade-up">
       <PageHeader title="Subscription" subtitle="Manage your CoachFlow plan, billing and support"
         actions={<Button variant="secondary" icon={<LifeBuoy className="h-4 w-4" />} onClick={() => setTicketOpen(true)}>Get help</Button>} />
+
+      {data.paymentsEnabled === false && (
+        <div className="mb-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800 ring-1 ring-amber-200">
+          Online plan payments are not switched on yet. To upgrade or renew, raise a request with <b>Get help</b> and our team will activate your plan.
+        </div>
+      )}
 
       {/* ── Current plan ── */}
       <div className="grid gap-6 lg:grid-cols-3">
@@ -148,12 +177,21 @@ export default function Subscription() {
                 <CalendarClock className="h-5 w-5 shrink-0 text-amber-200" />
                 {isTrial ? (
                   <span><b>{data.trialDaysLeft ?? 0} days</b> left in your free trial{data.trialEndsAt && <> · ends {fmtDate(data.trialEndsAt)}</>}</span>
+                ) : cancelScheduled ? (
+                  <span>Cancels on <b>{fmtDate(data.currentPeriodEnd)}</b> — you keep access until then</span>
                 ) : isCancelled ? (
-                  <span>Cancelled — access until <b>{fmtDate(data.currentPeriodEnd)}</b></span>
+                  <span>Cancelled{data.currentPeriodEnd && <> — access until <b>{fmtDate(data.currentPeriodEnd)}</b></>}</span>
+                ) : isPastDue ? (
+                  data.currentPeriodEnd && new Date(data.currentPeriodEnd) > new Date()
+                    ? <span>Payment overdue — renew before <b>{fmtDate(data.currentPeriodEnd)}</b></span>
+                    : <span>Payment overdue{data.currentPeriodEnd && <> since <b>{fmtDate(data.currentPeriodEnd)}</b></>}</span>
                 ) : (
                   <span>Renews on <b>{fmtDate(data.currentPeriodEnd)}</b></span>
                 )}
               </div>
+              {cancelScheduled && (
+                <Button variant="secondary" className="mt-3" loading={resuming} icon={<RotateCcw className="h-4 w-4" />} onClick={resume}>Keep my plan</Button>
+              )}
             </div>
             <div className="space-y-5 rounded-2xl bg-black/10 p-5 ring-1 ring-white/10">
               <p className="text-sm font-bold">Usage</p>
@@ -177,7 +215,7 @@ export default function Subscription() {
               );
             })}
           </ul>
-          {!isCancelled && !isTrial && (
+          {!isCancelled && !cancelScheduled && (
             <button onClick={() => setCancelOpen(true)} className="mt-5 self-start text-xs font-semibold text-slate-400 hover:text-rose-600">Cancel subscription</button>
           )}
         </Card>
@@ -201,9 +239,13 @@ export default function Subscription() {
 
       <div className="mt-8 grid gap-6 md:grid-cols-3">
         {data.plans.map((p, i) => {
-          const isCurrent = p.key === data.plan && activeCycle === data.billingCycle && !isTrial && !isCancelled;
+          const samePlan = p.key === data.plan && activeCycle === data.billingCycle;
+          const isCurrent = samePlan && !mustPay;
           const isUp = i > currentIdx;
-          const label = isCurrent ? 'Current plan' : isTrial || isCancelled ? `Choose ${p.name}` : p.key === data.plan ? `Switch to ${activeCycle}` : isUp ? `Upgrade to ${p.name}` : `Downgrade to ${p.name}`;
+          const label = isCurrent ? 'Current plan'
+            : isTrial || isCancelled ? `Choose ${p.name}`
+            : isPastDue && samePlan ? `Renew ${p.name}`
+            : p.key === data.plan ? `Switch to ${activeCycle}` : isUp ? `Upgrade to ${p.name}` : `Downgrade to ${p.name}`;
           const tooSmall = data.usage.students > p.studentLimit || data.usage.teachers > p.teacherLimit;
           return (
             <div key={p.key} className={clsx('relative flex flex-col rounded-3xl bg-white p-6 transition',
@@ -226,9 +268,9 @@ export default function Subscription() {
                 {p.features.map((f) => <li key={f} className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />{FEATURE_INFO[f]?.label ?? f}</li>)}
               </ul>
               {tooSmall && !isCurrent && <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">Your current usage exceeds this plan's limits.</p>}
-              <Button className="mt-5 w-full" disabled={isCurrent || tooSmall}
+              <Button className="mt-5 w-full" disabled={isCurrent || tooSmall || data.paymentsEnabled === false}
                 variant={isCurrent ? 'secondary' : p.popular || isUp ? 'premium' : 'secondary'}
-                icon={isCurrent ? <Check className="h-4 w-4" /> : isUp || isTrial ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
+                icon={isCurrent ? <Check className="h-4 w-4" /> : isUp || isTrial || (isPastDue && samePlan) ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
                 onClick={() => openCheckout(p)}>
                 {label}
               </Button>
@@ -266,34 +308,16 @@ export default function Subscription() {
         <Card className="xl:col-span-2">
           <CardHeader title="Support tickets" subtitle="We usually reply within a few hours" icon={<LifeBuoy className="h-5 w-5" />}
             action={<Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => setTicketOpen(true)}>New ticket</Button>} />
-          {tickets.loading ? (
+          {tickets.loading && !tickets.data ? (
             <div className="space-y-2"><Skeleton className="h-16" /><Skeleton className="h-16" /></div>
-          ) : !tickets.data?.length ? (
+          ) : !tickets.data?.items.length ? (
             <EmptyState title="No tickets" text="Stuck somewhere? Raise a ticket and our team will help." />
           ) : (
-            <ul className="space-y-3">
-              {tickets.data.map((t) => (
-                <li key={t._id} className="rounded-xl border border-slate-200 p-3.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="font-semibold text-slate-800">{t.subject}</p>
-                    <StatusBadge status={t.status} />
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-sm text-slate-500">{t.message}</p>
-                  <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-400">
-                    <Badge tone={t.priority === 'high' ? 'red' : t.priority === 'low' ? 'gray' : 'blue'} className="capitalize">{t.priority}</Badge>
-                    <span>{timeAgo(t.createdAt)}</span>
-                    {t.replies.length > 0 && <span>· {t.replies.length} repl{t.replies.length > 1 ? 'ies' : 'y'}</span>}
-                  </div>
-                  {t.replies.length > 0 && (
-                    <div className="mt-2 rounded-lg bg-brand-50/60 p-2.5 text-xs text-slate-600">
-                      <b className="text-brand-700">{t.replies[t.replies.length - 1].by}:</b> {t.replies[t.replies.length - 1].text}
-                      <span className="ml-1 text-slate-400">· {fmtDateTime(t.replies[t.replies.length - 1].at)}</span>
-                    </div>
-                  )}
-                </li>
-              ))}
+            <ul className={clsx('space-y-3 transition-opacity', tickets.loading && 'opacity-60')}>
+              {tickets.data.items.map((t) => <TicketItem key={t._id} t={t} onReplied={tickets.reload} />)}
             </ul>
           )}
+          {tickets.pager && <Pager {...tickets.pager} noun="tickets" className="-mx-5 -mb-5 mt-4 sm:-mx-6 sm:-mb-6" />}
         </Card>
       </div>
 
@@ -326,7 +350,7 @@ export default function Subscription() {
               <div className="flex justify-between border-t border-slate-100 pt-2"><span className="font-semibold text-slate-700">Total due now</span><span className="font-extrabold text-slate-900">{inr(price(checkout))}</span></div>
             </div>
             <p className="mt-4 flex items-center gap-2 rounded-xl bg-amber-50 p-3 text-xs text-amber-800">
-              <ShieldCheck className="h-4 w-4 shrink-0" /> Demo mode: payment is simulated instantly. Connect Razorpay on the server for live payments.
+              <ShieldCheck className="h-4 w-4 shrink-0" /> Demo mode: payment is simulated instantly — no money is charged.
             </p>
           </div>
         ))}
@@ -334,7 +358,11 @@ export default function Subscription() {
 
       <ConfirmDialog open={cancelOpen} onClose={() => setCancelOpen(false)} onConfirm={cancel} loading={cancelling} danger
         title="Cancel subscription?" confirmLabel="Yes, cancel"
-        text={<>Your institute will keep access until <b>{fmtDate(data.currentPeriodEnd)}</b>. After that, automated reminders, parent notifications and premium features will stop.</>} />
+        text={paidPeriod
+          ? <>Your paid period keeps running: you keep full access until <b>{fmtDate(data.currentPeriodEnd)}</b> and will not be charged again. After that, automated reminders, parent notifications and premium features will stop. You can undo this any time before then.</>
+          : isTrial
+            ? <>Your free trial will <b>stop now</b> and you will lose access to CoachFlow features straight away. You can choose a plan later to continue.</>
+            : <>Your subscription will stop <b>now</b>. Automated reminders, parent notifications and premium features will stop straight away.</>} />
 
       <Modal open={ticketOpen} onClose={() => setTicketOpen(false)} title="New support ticket" subtitle="Tell us what you need help with"
         footer={<><Button variant="secondary" onClick={() => setTicketOpen(false)}>Cancel</Button><Button loading={savingTicket} onClick={submitTicket}>Submit ticket</Button></>}>
@@ -347,5 +375,72 @@ export default function Subscription() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+function TicketItem({ t, onReplied }: { t: Ticket; onReplied: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const last = t.replies[t.replies.length - 1];
+
+  const send = async () => {
+    if (!text.trim()) return toast.error('Write a reply first');
+    setSending(true);
+    try {
+      await api.post(`/subscription/tickets/${t._id}/reply`, { text: text.trim() });
+      toast.success('Reply sent');
+      setText('');
+      onReplied();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <li className="rounded-xl border border-slate-200 p-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <p className="font-semibold text-slate-800">{t.subject}</p>
+        <StatusBadge status={t.status} />
+      </div>
+      <p className={clsx('mt-1 whitespace-pre-line text-sm text-slate-500', !open && 'line-clamp-2')}>{t.message}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+        <Badge tone={t.priority === 'high' ? 'red' : t.priority === 'low' ? 'gray' : 'blue'} className="capitalize">{t.priority}</Badge>
+        <span>{timeAgo(t.createdAt)}</span>
+        {t.replies.length > 0 && <span>· {t.replies.length} repl{t.replies.length > 1 ? 'ies' : 'y'}</span>}
+        <button type="button" onClick={() => setOpen(!open)} className="ml-auto inline-flex items-center gap-1 font-semibold text-brand-600 hover:underline">
+          <MessageSquare className="h-3.5 w-3.5" /> {open ? 'Hide' : t.replies.length ? 'View & reply' : 'Reply'}
+        </button>
+      </div>
+      {!open && last && (
+        <div className="mt-2 rounded-lg bg-brand-50/60 p-2.5 text-xs text-slate-600">
+          <b className="text-brand-700">{last.by}:</b> <span className="line-clamp-2 inline">{last.text}</span>
+          <span className="ml-1 text-slate-400">· {fmtDateTime(last.at)}</span>
+        </div>
+      )}
+      {open && (
+        <div className="mt-3 space-y-2">
+          {t.replies.map((r, i) => {
+            const mine = r.by.endsWith('(institute)');
+            return (
+              <div key={i} className={clsx('rounded-lg p-2.5 text-xs', mine ? 'ml-6 bg-slate-100 text-slate-700' : 'mr-6 bg-brand-50/70 text-slate-700')}>
+                <p className="mb-0.5 flex justify-between gap-2">
+                  <b className={mine ? 'text-slate-800' : 'text-brand-700'}>{r.by}</b>
+                  <span className="text-slate-400">{fmtDateTime(r.at)}</span>
+                </p>
+                <p className="whitespace-pre-line">{r.text}</p>
+              </div>
+            );
+          })}
+          <Textarea placeholder={t.status === 'resolved' ? 'Replying will reopen this ticket…' : 'Write a reply…'} value={text} maxLength={3000}
+            onChange={(e) => setText(e.target.value)} />
+          <div className="flex justify-end">
+            <Button size="sm" loading={sending} disabled={!text.trim()} onClick={send}>Send reply</Button>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }

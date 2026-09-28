@@ -1,6 +1,8 @@
 import axios, { AxiosError } from 'axios';
 
 export const TOKEN_KEY = 'coachflow.token';
+/** One-time message shown on the login page (e.g. after an institute is suspended). */
+export const NOTICE_KEY = 'coachflow.notice';
 
 export const api = axios.create({ baseURL: '/api' });
 
@@ -15,6 +17,16 @@ api.interceptors.response.use(
   (err: AxiosError<{ message?: string; code?: string; feature?: string }>) => {
     if (err.response?.status === 401 && localStorage.getItem(TOKEN_KEY)) {
       localStorage.removeItem(TOKEN_KEY);
+      if (!location.pathname.startsWith('/login')) location.href = '/login';
+    }
+    // The institute was suspended by CoachFlow: sign out everywhere and explain why on the login page.
+    if (err.response?.data?.code === 'INSTITUTE_SUSPENDED' && localStorage.getItem(TOKEN_KEY)) {
+      localStorage.removeItem(TOKEN_KEY);
+      try {
+        sessionStorage.setItem(NOTICE_KEY, err.response.data.message ?? 'This institute account has been suspended.');
+      } catch {
+        /* storage unavailable — the login page still shows the error on the next attempt */
+      }
       if (!location.pathname.startsWith('/login')) location.href = '/login';
     }
     if (err.response?.data?.code === 'UPGRADE_REQUIRED') {

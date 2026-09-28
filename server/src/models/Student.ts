@@ -28,6 +28,8 @@ const studentSchema = new Schema(
   { timestamps: true },
 );
 studentSchema.index({ instituteId: 1, studentCode: 1 }, { unique: true });
+studentSchema.index({ instituteId: 1, batchIds: 1, status: 1 });
+studentSchema.index({ instituteId: 1, status: 1, name: 1, _id: 1 });
 
 export type StudentT = InferSchemaType<typeof studentSchema>;
 export type StudentDoc = HydratedDocument<StudentT>;

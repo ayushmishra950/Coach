@@ -26,9 +26,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { data } = await api.get<Session>('/auth/me');
       setSession(data);
-    } catch {
-      localStorage.removeItem(TOKEN_KEY);
-      setSession(null);
+    } catch (e) {
+      // Only an explicit 401 means the token is dead; on network/5xx errors keep the token and current session.
+      if ((e as { response?: { status?: number } })?.response?.status === 401) {
+        localStorage.removeItem(TOKEN_KEY);
+        setSession(null);
+      }
     }
   }, []);
 

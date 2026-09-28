@@ -1,6 +1,6 @@
 import {
   Activity, AlertTriangle, ArrowRight, BadgeIndianRupee, Building2, Clock, Crown, CreditCard, GraduationCap, LifeBuoy,
-  Percent, RefreshCw, TrendingUp, UserMinus, Wallet, XCircle,
+  CalendarClock, Hourglass, Percent, RefreshCw, TrendingUp, UserMinus, Wallet, XCircle,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -15,7 +15,7 @@ const PALETTE = ['#6366f1', '#8b5cf6', '#ec4899', '#10b981', '#f59e0b', '#0ea5e9
 
 interface AdminStats {
   totals: {
-    institutes: number; active: number; trial: number; cancelled: number; pastDue: number; suspended: number; premium: number;
+    institutes: number; active: number; trial: number; trialExpired: number; endingSoon: number; cancelled: number; pastDue: number; suspended: number; premium: number;
     mrr: number; arr: number; arpa: number; churnRate: number; failedPayments30d: number; openTickets: number; totalStudents: number;
   };
   planDistribution: { plan: string; key: string; count: number; mrr: number }[];
@@ -110,8 +110,8 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Total institutes" value={t.institutes} icon={<Building2 className="h-5 w-5" />} tone="brand" hint={`${t.pastDue} past due · ${t.suspended} suspended`} />
         <StatCard label="Active subs" value={t.active} icon={<Activity className="h-5 w-5" />} tone="green" hint="Paying customers" />
-        <StatCard label="MRR" value={inrShort(t.mrr)} icon={<BadgeIndianRupee className="h-5 w-5" />} tone="violet" hint={inr(t.mrr)} />
-        <StatCard label="On trial" value={t.trial} icon={<Clock className="h-5 w-5" />} tone="sky" hint="Potential conversions" />
+        <StatCard label="MRR" value={inrShort(t.mrr)} icon={<BadgeIndianRupee className="h-5 w-5" />} tone="violet" hint={`${inr(t.mrr)} · active + past due`} />
+        <StatCard label="Live trials" value={t.trial} icon={<Clock className="h-5 w-5" />} tone="sky" hint="Trial still running" />
         <StatCard label="Cancelled" value={t.cancelled} icon={<UserMinus className="h-5 w-5" />} tone="rose" hint="Lifetime churned" />
         <StatCard label="Premium" value={t.premium} icon={<Crown className="h-5 w-5" />} tone="amber" hint="Top-tier customers" />
       </div>
@@ -120,10 +120,17 @@ export default function AdminDashboard() {
       <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
         <MiniStat label="ARR" value={inrShort(t.arr)} icon={<TrendingUp className="h-5 w-5" />} tone="bg-brand-50 text-brand-600" hint="MRR × 12" />
         <MiniStat label="ARPA" value={inr(t.arpa)} icon={<Wallet className="h-5 w-5" />} tone="bg-violet-50 text-violet-600" hint="Avg revenue / account" />
-        <MiniStat label="Churn rate" value={`${t.churnRate}%`} icon={<Percent className="h-5 w-5" />} tone="bg-rose-50 text-rose-600" hint="Cancelled / total" />
+        <MiniStat label="Churn (30 days)" value={`${t.churnRate}%`} icon={<Percent className="h-5 w-5" />} tone="bg-rose-50 text-rose-600" hint="Paid accounts cancelled" />
         <MiniStat label="Failed payments" value={t.failedPayments30d} icon={<XCircle className="h-5 w-5" />} tone="bg-amber-50 text-amber-600" hint="Last 30 days" />
         <MiniStat label="Open tickets" value={t.openTickets} icon={<LifeBuoy className="h-5 w-5" />} tone="bg-sky-50 text-sky-600" hint="Awaiting resolution" />
         <MiniStat label="Students" value={t.totalStudents.toLocaleString('en-IN')} icon={<GraduationCap className="h-5 w-5" />} tone="bg-emerald-50 text-emerald-600" hint="Active on platform" />
+      </div>
+
+      {/* Lifecycle */}
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <MiniStat label="Live trials" value={t.trial} icon={<Clock className="h-5 w-5" />} tone="bg-sky-50 text-sky-600" hint="Trial period still running" />
+        <MiniStat label="Expired trials" value={t.trialExpired} icon={<Hourglass className="h-5 w-5" />} tone="bg-slate-100 text-slate-600" hint="Trial ended, not converted" />
+        <MiniStat label="Ending soon" value={t.endingSoon} icon={<CalendarClock className="h-5 w-5" />} tone="bg-amber-50 text-amber-600" hint="Cancellation scheduled" />
       </div>
 
       {/* Charts row 1 */}

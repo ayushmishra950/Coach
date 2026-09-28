@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { AlertTriangle, Inbox, Loader2, Search, X } from 'lucide-react';
-import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { useEffect, useId, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { initials } from '../lib/format';
 
@@ -15,7 +15,7 @@ export function Button({
   variant = 'primary', size, loading, icon, children, className, ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: BtnVariant; size?: 'sm'; loading?: boolean; icon?: ReactNode }) {
   return (
-    <button className={clsx(BTN[variant], size === 'sm' && 'btn-sm', className)} disabled={loading || rest.disabled} {...rest}>
+    <button {...rest} className={clsx(BTN[variant], size === 'sm' && 'btn-sm', className)} disabled={loading || rest.disabled}>
       {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : icon}
       {children}
     </button>
@@ -164,28 +164,58 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   );
 }
 
+/** Open dialogs, top-most last — so Escape / Tab only affect the dialog on top. */
+const modalStack: string[] = [];
+
 export function Modal({ open, onClose, title, subtitle, children, footer, size = 'md' }: {
   open: boolean; onClose: () => void; title: ReactNode; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode; size?: 'sm' | 'md' | 'lg' | 'xl';
 }) {
+  const panel = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const titleId = useId();
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const opener = document.activeElement as HTMLElement | null;
+    modalStack.push(titleId);
+    const focusables = () =>
+      Array.from(panel.current?.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') ?? []);
+    // Focus the first field (or the dialog itself) so keyboard users start inside it.
+    requestAnimationFrame(() => {
+      if (panel.current && !panel.current.contains(document.activeElement)) (focusables().find((el) => el.tagName !== 'BUTTON') ?? panel.current).focus();
+    });
+    const onKey = (e: KeyboardEvent) => {
+      if (modalStack[modalStack.length - 1] !== titleId) return; // only the top-most dialog reacts
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closeRef.current();
+      } else if (e.key === 'Tab') {
+        const list = focusables();
+        if (!list.length) return;
+        const first = list[0], last = list[list.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
     document.addEventListener('keydown', onKey);
     document.body.style.overflow = 'hidden';
     return () => {
       document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = '';
+      modalStack.splice(modalStack.lastIndexOf(titleId), 1);
+      if (!modalStack.length) document.body.style.overflow = '';
+      opener?.focus?.(); // give focus back to what opened the dialog
     };
-  }, [open, onClose]);
+  }, [open, titleId]);
   if (!open) return null;
   const w = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' }[size];
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
-      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose} />
-      <div className={clsx('relative flex max-h-[92vh] w-full flex-col rounded-t-3xl bg-white shadow-2xl animate-fade-up sm:rounded-3xl', w)}>
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+        className={clsx('relative flex max-h-[92vh] w-full flex-col rounded-t-3xl bg-white shadow-2xl outline-none animate-fade-up sm:rounded-3xl', w)}>
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">{title}</h2>
+            <h2 id={titleId} className="text-lg font-bold text-slate-900">{title}</h2>
             {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
           </div>
           <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Close">

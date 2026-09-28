@@ -1,8 +1,9 @@
+import './config.js'; // pins the time zone before any demo date is generated
 import bcrypt from 'bcryptjs';
 import mongoose, { Types } from 'mongoose';
 import { fileURLToPath } from 'node:url';
 import {
-  Announcement, Attendance, AuditLog, Batch, DEFAULT_PLANS, Institute, Invoice, Notification, Payment, Plan, Student,
+  Announcement, Attendance, AuditLog, Batch, Conversation, DEFAULT_PLANS, Institute, Invoice, Message, Notification, Payment, Plan, Student,
   SubscriptionPayment, SupportTicket, Test, User,
 } from './models/index.js';
 import { DAYS, addDays, ymd } from './utils/dates.js';
@@ -19,18 +20,41 @@ const LAST = ['Sharma', 'Verma', 'Gupta', 'Singh', 'Agarwal', 'Jain', 'Mehta', '
 const PARENT_M = ['Suresh', 'Ramesh', 'Mahesh', 'Rajendra', 'Anil', 'Sunil', 'Vinod', 'Ashok', 'Manoj', 'Sanjay'];
 const phone = () => '9' + String(between(100000000, 999999999));
 
+/**
+ * Login details for the Super Admin and the demo institute's owner. Set them in the
+ * environment (never in code) — otherwise the public demo logins are used.
+ */
+function seedAccounts() {
+  const env = (k: string) => process.env[k]?.trim() || '';
+  return {
+    admin: {
+      name: env('SUPERADMIN_NAME') || 'CoachFlow Admin',
+      email: (env('SUPERADMIN_EMAIL') || 'admin@coachflow.in').toLowerCase(),
+      password: env('SUPERADMIN_PASSWORD') || 'admin123',
+      custom: !!env('SUPERADMIN_PASSWORD'),
+    },
+    owner: {
+      name: env('OWNER_NAME') || 'Rajesh Kumar',
+      email: (env('OWNER_EMAIL') || 'owner@coachflow.in').toLowerCase(),
+      password: env('OWNER_PASSWORD') || 'owner123',
+      custom: !!env('OWNER_PASSWORD'),
+    },
+  };
+}
+
 export async function seed() {
   _s = 42;
   const hash = (p: string) => bcrypt.hash(p, 10);
+  const acc = seedAccounts();
   for (const p of DEFAULT_PLANS) await Plan.updateOne({ key: p.key }, { $setOnInsert: p }, { upsert: true });
 
-  await User.create({ name: 'CoachFlow Admin', email: 'admin@coachflow.in', password: await hash('admin123'), role: 'superadmin' });
+  await User.create({ name: acc.admin.name, email: acc.admin.email, password: await hash(acc.admin.password), role: 'superadmin' });
 
   // ── Demo institute ────────────────────────────────────────────────
   const now = new Date();
   const inst = await Institute.create({
     name: 'ABC Coaching Institute',
-    ownerName: 'Rajesh Kumar',
+    ownerName: acc.owner.name,
     email: 'rajesh@abccoaching.in',
     phone: '9876543210',
     address: '2nd Floor, Shanti Complex, MG Road',
@@ -45,7 +69,7 @@ export async function seed() {
     createdAt: addDays(now, -200),
   });
   const I = inst._id;
-  await User.create({ name: 'Rajesh Kumar', email: 'owner@coachflow.in', phone: '9876543210', password: await hash('owner123'), role: 'owner', instituteId: I });
+  await User.create({ name: acc.owner.name, email: acc.owner.email, phone: '9876543210', password: await hash(acc.owner.password), role: 'owner', instituteId: I });
 
   const teacherDefs = [
     { name: 'Amit Verma', email: 'teacher@coachflow.in', subjects: ['Mathematics'], qualification: 'M.Sc Mathematics' },
@@ -225,9 +249,9 @@ export async function seed() {
 
   // ── Announcements & notifications ─────────────────────────────────
   await Announcement.create([
-    { instituteId: I, title: 'Diwali holidays', body: 'The institute will remain closed from 30 Oct to 3 Nov. Regular classes resume on 4 Nov.', pinned: true, createdByName: 'Rajesh Kumar', createdAt: addDays(now, -2) },
+    { instituteId: I, title: 'Diwali holidays', body: 'The institute will remain closed from 30 Oct to 3 Nov. Regular classes resume on 4 Nov.', pinned: true, createdByName: acc.owner.name, createdAt: addDays(now, -2) },
     { instituteId: I, title: "Tomorrow's class timing changed", body: 'Class 10 Mathematics — A will be held at 6:00 PM tomorrow instead of 5:00 PM.', batchIds: [batches[0]._id], createdByName: 'Amit Verma', createdAt: addDays(now, -1) },
-    { instituteId: I, title: 'JEE mock test series', body: 'Full-length JEE mock tests start every Sunday from next week, 9 AM – 12 PM in Hall A.', batchIds: [batches[2]._id, batches[5]._id], createdByName: 'Rajesh Kumar', createdAt: addDays(now, -5) },
+    { instituteId: I, title: 'JEE mock test series', body: 'Full-length JEE mock tests start every Sunday from next week, 9 AM – 12 PM in Hall A.', batchIds: [batches[2]._id, batches[5]._id], createdByName: acc.owner.name, createdAt: addDays(now, -5) },
   ]);
   const notes = [
     { type: 'attendance', audience: 'parent', studentId: rahul._id, title: 'Absent today', message: 'Rahul Sharma was absent today from Class 10 Science — A.', createdAt: addDays(now, -6) },
@@ -240,6 +264,48 @@ export async function seed() {
   await Notification.insertMany(notes.map((n) => ({ ...n, instituteId: I, deliveries: [{ channel: 'inApp', status: 'sent' }, ...(n.audience === 'parent' ? [{ channel: 'whatsapp', to: rahul.parentPhone, status: 'queued', info: 'Demo mode' }] : [])] })));
 
   await Institute.updateOne({ _id: I }, { 'counters.student': counter, 'counters.receipt': receipt });
+
+  // ── Demo chats (in-app messaging) ────────────────────────────────
+  const owner = (await User.findOne({ email: acc.owner.email }))!;
+  const amit = teachers[0];
+  const chat = async (a: { _id: Types.ObjectId; role: string }, b: { _id: Types.ObjectId; role: string }, lines: [0 | 1, string, number][]) => {
+    const conv = await Conversation.create({
+      instituteId: I,
+      key: [String(a._id), String(b._id)].sort().join('_'),
+      members: [{ userId: a._id, role: a.role }, { userId: b._id, role: b.role }],
+    });
+    const people = [a, b];
+    let last: { text: string; senderId: Types.ObjectId; at: Date } | null = null;
+    for (const [who, text, minsAgo] of lines) {
+      const at = new Date(now.getTime() - minsAgo * 60_000);
+      await Message.create({ instituteId: I, conversationId: conv._id, senderId: people[who]._id, text, createdAt: at, updatedAt: at });
+      last = { text, senderId: people[who]._id, at };
+    }
+    // `a` has read everything; `b` has the last message from `a` unread if `a` sent it.
+    const unreadForB = last && String(last.senderId) === String(a._id) ? 1 : 0;
+    await Conversation.updateOne(
+      { _id: conv._id },
+      { $set: { lastMessage: last, members: [
+        { userId: a._id, role: a.role, unread: 0, lastReadAt: last?.at },
+        { userId: b._id, role: b.role, unread: unreadForB, lastReadAt: unreadForB ? new Date(last!.at.getTime() - 1000) : last?.at },
+      ], updatedAt: last?.at } },
+      { timestamps: false },
+    );
+  };
+  await chat(parent, owner, [
+    [0, 'Namaste sir, Rahul will be late tomorrow — he has a school function till 5 PM.', 180],
+    [1, 'Noted, thank you for letting us know. Amit sir will share the class notes with him.', 170],
+    [0, 'Thank you! Also, can we pay the next installment in two parts?', 60],
+  ]);
+  await chat(amit, parent, [
+    [0, 'Hello! Rahul did very well in the Trigonometry test — 42/50. Please ask him to revise Heights & Distances once.', 1500],
+    [1, 'That is great news, thank you sir. I will make sure he revises it this weekend.', 1440],
+    [0, 'Sure. Extra practice sheet is shared in class today 👍', 25],
+  ]);
+  await chat(owner, amit, [
+    [0, 'Amit, the Class 10 Maths — A test on Statistics is on Friday, right?', 300],
+    [1, 'Yes sir, 50 marks. I will enter marks the same evening.', 290],
+  ]);
 
   // ── Other SaaS tenants (for the Super Admin panel) ───────────────
   const cities = ['Kota', 'Indore', 'Lucknow', 'Pune', 'Patna', 'Delhi', 'Bhopal', 'Nagpur', 'Ahmedabad', 'Chandigarh', 'Dehradun', 'Ranchi'];
@@ -293,8 +359,8 @@ export async function seed() {
   await AuditLog.create({ instituteId: I, userName: 'System', action: 'seed', entity: 'institute', entityId: String(I) });
 
   console.log('✓ Demo data ready');
-  console.log('  Super Admin : admin@coachflow.in   / admin123');
-  console.log('  Owner       : owner@coachflow.in   / owner123');
+  console.log(`  Super Admin : ${acc.admin.email}${acc.admin.custom ? ' (password from SUPERADMIN_PASSWORD)' : ' / admin123'}`);
+  console.log(`  Owner       : ${acc.owner.email}${acc.owner.custom ? ' (password from OWNER_PASSWORD)' : ' / owner123'}`);
   console.log('  Teacher     : teacher@coachflow.in / teacher123');
   console.log('  Parent      : parent@coachflow.in  / parent123');
 }

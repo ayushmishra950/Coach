@@ -33,7 +33,7 @@ export interface Student {
   _id: string; studentCode: string; name: string; phone?: string; dob?: string; gender?: 'male' | 'female' | 'other';
   address?: string; parentName?: string; parentPhone?: string; parentEmail?: string; course?: string;
   batchIds: string[] | BatchRef[]; batches?: BatchRef[]; joiningDate?: string; status: 'active' | 'inactive';
-  attendancePct?: number | null; avgScore?: number | null; fees?: FeeRollup | null; hasPortal?: boolean;
+  attendancePct?: number | null; avgScore?: number | null; fees?: FeeRollup | null; hasPortal?: boolean; parentUserId?: string | null;
   notes?: { text: string; by: string; at: string }[];
 }
 
@@ -67,3 +67,21 @@ export interface Notification {
 export interface Announcement {
   _id: string; title: string; body: string; batchIds: BatchRef[]; pinned: boolean; createdByName?: string; createdBy?: string; createdAt: string;
 }
+
+/* ── Chat ───────────────────────────────────────────────────────────── */
+export type ChatRole = 'owner' | 'teacher' | 'parent';
+export interface ChatPerson { id: string; name: string; role: ChatRole; subtitle: string; online: boolean; active?: boolean }
+export interface ChatMessage {
+  _id: string; conversationId: string; senderId: string; text: string; clientId?: string; createdAt: string;
+  /** Client-only state for optimistic sends. */
+  pending?: boolean; failed?: boolean;
+}
+export interface Conversation {
+  _id: string; other: ChatPerson; lastMessage: { text: string; senderId: string; at: string } | null;
+  unread: number; otherLastReadAt: string | null; updatedAt: string;
+}
+
+/* ── Pagination ─────────────────────────────────────────────────────── */
+/** Shape of every paged list API: at most 20 items per page. */
+export interface Paged<T> { items: T[]; page: number; limit: number; total: number; pages: number }
+export const PAGE_SIZE = 20;

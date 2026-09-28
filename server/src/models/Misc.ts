@@ -26,6 +26,8 @@ const notificationSchema = new Schema(
   { timestamps: true },
 );
 notificationSchema.index({ instituteId: 1, createdAt: -1 });
+notificationSchema.index({ instituteId: 1, audience: 1, studentId: 1, createdAt: -1 });
+notificationSchema.index({ instituteId: 1, audience: 1, userId: 1, createdAt: -1 });
 
 export type NotificationT = InferSchemaType<typeof notificationSchema>;
 export const Notification = model('Notification', notificationSchema);
@@ -37,11 +39,15 @@ const announcementSchema = new Schema(
     body: { type: String, required: true },
     batchIds: [{ type: Schema.Types.ObjectId, ref: 'Batch' }], // empty = everyone
     pinned: { type: Boolean, default: false },
+    /** Visible to the owner and teachers only — never sent to parents. */
+    staffOnly: { type: Boolean, default: false },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     createdByName: String,
+    editedAt: Date,
   },
   { timestamps: true },
 );
+announcementSchema.index({ instituteId: 1, pinned: -1, createdAt: -1 });
 export const Announcement = model('Announcement', announcementSchema);
 
 /** SaaS billing transactions (institute → CoachFlow). */
@@ -57,6 +63,8 @@ const subscriptionPaymentSchema = new Schema(
   },
   { timestamps: true },
 );
+subscriptionPaymentSchema.index({ status: 1, createdAt: -1 });
+subscriptionPaymentSchema.index({ instituteId: 1, createdAt: -1 });
 export const SubscriptionPayment = model('SubscriptionPayment', subscriptionPaymentSchema);
 
 const ticketSchema = new Schema(
@@ -71,6 +79,7 @@ const ticketSchema = new Schema(
   },
   { timestamps: true },
 );
+ticketSchema.index({ status: 1, createdAt: -1 });
 export const SupportTicket = model('SupportTicket', ticketSchema);
 
 const auditSchema = new Schema(
@@ -81,7 +90,22 @@ const auditSchema = new Schema(
     action: String,
     entity: String,
     entityId: String,
+    /** Short human-readable detail, e.g. "₹5,000 → ₹4,500" or a reason. */
+    detail: String,
   },
   { timestamps: true },
 );
+auditSchema.index({ instituteId: 1, createdAt: -1 });
+auditSchema.index({ createdAt: -1 });
 export const AuditLog = model('AuditLog', auditSchema);
+
+/**
+ * Short-lived named locks so a background job runs on only one server at a time
+ * (e.g. fee reminders when the API is scaled to several instances).
+ */
+const lockSchema = new Schema({
+  key: { type: String, required: true, unique: true },
+  until: { type: Date, required: true },
+  owner: String,
+});
+export const Lock = model('Lock', lockSchema);

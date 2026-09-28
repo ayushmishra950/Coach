@@ -7,6 +7,8 @@ const batchSchema = new Schema(
     course: String, // e.g. Class 10, JEE, NEET
     subject: String,
     teacherId: { type: Schema.Types.ObjectId, ref: 'User' },
+    /** Other subject teachers who can also mark attendance and enter marks for this batch. */
+    coTeacherIds: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     days: [{ type: String, enum: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] }],
     startTime: { type: String, default: '17:00' },
     endTime: { type: String, default: '18:00' },
@@ -17,6 +19,9 @@ const batchSchema = new Schema(
   },
   { timestamps: true },
 );
+
+batchSchema.index({ instituteId: 1, teacherId: 1 });
+batchSchema.index({ instituteId: 1, coTeacherIds: 1 });
 
 export type BatchT = InferSchemaType<typeof batchSchema>;
 export type BatchDoc = HydratedDocument<BatchT>;

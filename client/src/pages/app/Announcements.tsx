@@ -1,24 +1,53 @@
-import { Check, Globe, Megaphone, Pin, PinOff, Send, Trash2, Users } from 'lucide-react';
-import { useState } from 'react';
+import { Check, Globe, Lock, Megaphone, Pencil, Pin, PinOff, Send, Trash2, Users } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Avatar, Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, ErrorState, Input, PageHeader, Skeleton, Textarea, Toggle, clsx,
+  Avatar, Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, ErrorState, Input, Modal, PageHeader, Skeleton, Textarea, Toggle, clsx,
 } from '../../components/ui';
+import { Pager } from '../../components/Pager';
 import { useAuth } from '../../context/AuthContext';
-import { useApi } from '../../hooks/useApi';
+import { useApi, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
 import { fmtDateTime, timeAgo } from '../../lib/format';
-import type { Announcement, Batch } from '../../lib/types';
+import type { Announcement } from '../../lib/types';
+
+interface BatchOption { _id: string; name: string; color?: string }
+/** Announcement with the newer server fields. */
+type Item = Announcement & { staffOnly?: boolean; editedAt?: string };
 
 export default function Announcements() {
   const { session } = useAuth();
   const isOwner = session?.user.role === 'owner';
-  const { data, loading, error, reload } = useApi<Announcement[]>('/announcements');
-  const { data: batches } = useApi<Batch[]>('/batches');
-  const [toDelete, setToDelete] = useState<Announcement | null>(null);
+  const list = usePagedApi<Item>('/announcements');
+  const { data, loading, error, reload, page, setPage } = list;
+  const { data: batches } = useApi<BatchOption[]>('/batches/options', { active: 'true' });
+  const [toDelete, setToDelete] = useState<Item | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [editing, setEditing] = useState<Item | null>(null);
+  const [edit, setEdit] = useState({ title: '', body: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
 
-  const togglePin = async (a: Announcement) => {
+  const openEdit = (a: Item) => {
+    setEditing(a);
+    setEdit({ title: a.title, body: a.body });
+  };
+  const saveEdit = async () => {
+    if (!editing) return;
+    if (!edit.title.trim() || !edit.body.trim()) return toast.error('Please add a title and message');
+    setSavingEdit(true);
+    try {
+      await api.put(`/announcements/${editing._id}`, { title: edit.title.trim(), body: edit.body.trim() });
+      toast.success('Announcement updated');
+      setEditing(null);
+      reload();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const togglePin = async (a: Item) => {
     try {
       await api.put(`/announcements/${a._id}/pin`);
       toast.success(a.pinned ? 'Unpinned' : 'Pinned to top');
@@ -43,20 +72,27 @@ export default function Announcements() {
     }
   };
 
-  const items = [...(data ?? [])].sort((a, b) => Number(b.pinned) - Number(a.pinned) || +new Date(b.createdAt) - +new Date(a.createdAt));
+  // Server orders pinned first, then newest; one page of 20 at a time.
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  // (usePagedApi steps back automatically when a delete empties the last page.)
+
+  // A new announcement lands at the top of page 1.
+  const onSent = () => (page === 1 ? reload() : setPage(1));
 
   return (
     <div>
       <PageHeader title="Announcements" subtitle={isOwner ? 'Share updates with parents across the institute or specific batches' : 'Share updates with parents of your batches'} />
       <div className="grid gap-6 lg:grid-cols-5">
         <div className="lg:col-span-2">
-          <Composer isOwner={isOwner} batches={(batches ?? []).filter((b) => b.active !== false)} onSent={reload} />
+          <Composer isOwner={isOwner} batches={batches ?? []} onSent={onSent} />
         </div>
         <div className="lg:col-span-3">
           <Card pad={false}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
               <h3 className="flex items-center gap-2 font-bold text-slate-900"><Megaphone className="h-4 w-4 text-brand-600" /> Feed</h3>
-              <span className="text-xs text-slate-400">{items.length} announcement{items.length === 1 ? '' : 's'}</span>
+              <span className="text-xs text-slate-400">{total} announcement{total === 1 ? '' : 's'}</span>
             </div>
             {loading && !data ? (
               <div className="space-y-4 p-5">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-24" />)}</div>
@@ -68,6 +104,7 @@ export default function Announcements() {
               <ul className="divide-y divide-slate-100">
                 {items.map((a) => {
                   const canDelete = isOwner || a.createdBy === session?.user.id;
+                  const canEdit = canDelete;
                   return (
                     <li key={a._id} className={clsx('group px-5 py-4 transition', a.pinned && 'bg-amber-50/50')}>
                       <div className="flex items-start gap-3">
@@ -76,6 +113,7 @@ export default function Announcements() {
                           <div className="flex flex-wrap items-center gap-2">
                             {a.pinned && <span title="Pinned">📌</span>}
                             <h4 className="font-bold text-slate-900">{a.title}</h4>
+                            {a.staffOnly && <Badge tone="amber"><Lock className="h-3 w-3" /> Staff only</Badge>}
                           </div>
                           <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-slate-600">{a.body}</p>
                           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
@@ -84,13 +122,18 @@ export default function Announcements() {
                             ) : (
                               <Badge tone="green"><Globe className="h-3 w-3" /> Everyone</Badge>
                             )}
-                            <span className="text-xs text-slate-400" title={fmtDateTime(a.createdAt)}>· {a.createdByName ?? 'Staff'} · {timeAgo(a.createdAt)}</span>
+                            <span className="text-xs text-slate-400" title={fmtDateTime(a.createdAt)}>· {a.createdByName ?? 'Staff'} · {timeAgo(a.createdAt)}{a.editedAt && <span title={fmtDateTime(a.editedAt)}> · edited</span>}</span>
                           </div>
                         </div>
                         <div className="flex shrink-0 gap-1">
                           {isOwner && (
                             <button onClick={() => togglePin(a)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-amber-600" title={a.pinned ? 'Unpin' : 'Pin'}>
                               {a.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                            </button>
+                          )}
+                          {canEdit && (
+                            <button onClick={() => openEdit(a)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-brand-600" title="Edit">
+                              <Pencil className="h-4 w-4" />
                             </button>
                           )}
                           {canDelete && (
@@ -105,6 +148,7 @@ export default function Announcements() {
                 })}
               </ul>
             )}
+            {list.pager && <Pager {...list.pager} noun="announcements" />}
           </Card>
         </div>
       </div>
@@ -119,16 +163,24 @@ export default function Announcements() {
         text={<>“{toDelete?.title}” will be removed from the feed. Notifications already sent to parents will not be recalled.</>}
         confirmLabel="Delete"
       />
+      <Modal open={!!editing} onClose={() => setEditing(null)} title="Edit announcement" subtitle="Fixes appear in the feed. The announcement is not sent to parents again."
+        footer={<><Button variant="secondary" onClick={() => setEditing(null)}>Cancel</Button><Button loading={savingEdit} onClick={saveEdit}>Save changes</Button></>}>
+        <div className="space-y-4">
+          <Input label="Title" value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} maxLength={150} />
+          <Textarea label="Message" value={edit.body} onChange={(e) => setEdit({ ...edit, body: e.target.value })} rows={6} maxLength={3000} />
+        </div>
+      </Modal>
     </div>
   );
 }
 
-function Composer({ isOwner, batches, onSent }: { isOwner: boolean; batches: Batch[]; onSent: () => void }) {
+function Composer({ isOwner, batches, onSent }: { isOwner: boolean; batches: BatchOption[]; onSent: () => void }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [everyone, setEveryone] = useState(isOwner);
   const [selected, setSelected] = useState<string[]>([]);
   const [pinned, setPinned] = useState(false);
+  const [staffOnly, setStaffOnly] = useState(false);
   const [sending, setSending] = useState(false);
 
   const toggleBatch = (id: string) => {
@@ -144,12 +196,15 @@ function Composer({ isOwner, batches, onSent }: { isOwner: boolean; batches: Bat
     if (isOwner && !everyone && !batchIds.length) return toast.error('Choose "Everyone" or at least one batch');
     setSending(true);
     try {
-      const { data } = await api.post<{ recipients: number }>('/announcements', { title: title.trim(), body: body.trim(), batchIds, pinned: isOwner && pinned });
-      toast.success(`Sent to ${data.recipients} parent${data.recipients === 1 ? '' : 's'}`);
+      const isStaff = isOwner && staffOnly;
+      const { data } = await api.post<{ recipients: number }>('/announcements', { title: title.trim(), body: body.trim(), batchIds, pinned: isOwner && pinned, staffOnly: isStaff });
+      const n = data.recipients ?? 0;
+      toast.success(isStaff ? 'Posted for staff only — not sent to parents' : n > 0 ? `Posted — sending to ${n} famil${n === 1 ? 'y' : 'ies'} in the background` : 'Posted — no families to notify in this audience');
       setTitle('');
       setBody('');
       setSelected([]);
       setPinned(false);
+      setStaffOnly(false);
       setEveryone(isOwner);
       onSent();
     } catch (e) {
@@ -163,8 +218,8 @@ function Composer({ isOwner, batches, onSent }: { isOwner: boolean; batches: Bat
     <Card className="lg:sticky lg:top-24">
       <CardHeader title="New announcement" subtitle="Parents are notified in-app and on WhatsApp (if enabled)" icon={<Send className="h-4 w-4" />} />
       <form onSubmit={submit} className="space-y-4">
-        <Input label="Title" placeholder="e.g. Holiday on Monday" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} />
-        <Textarea label="Message" placeholder="Write your announcement…" value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={1000} />
+        <Input label="Title" placeholder="e.g. Holiday on Monday" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150} />
+        <Textarea label="Message" placeholder="Write your announcement…" value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={3000} />
         <div>
           <span className="label">Audience</span>
           <div className="flex flex-wrap gap-2">
@@ -185,7 +240,8 @@ function Composer({ isOwner, batches, onSent }: { isOwner: boolean; batches: Bat
           )}
         </div>
         {isOwner && <Toggle checked={pinned} onChange={setPinned} label="📌 Pin to top" description="Pinned announcements stay above others" />}
-        <Button type="submit" className="w-full" loading={sending} icon={<Send className="h-4 w-4" />}>Send announcement</Button>
+        {isOwner && <Toggle checked={staffOnly} onChange={setStaffOnly} label="Staff only (don't send to parents)" description="Only you and your teachers will see it" />}
+        <Button type="submit" className="w-full" loading={sending} icon={<Send className="h-4 w-4" />}>{isOwner && staffOnly ? 'Post for staff' : 'Send announcement'}</Button>
       </form>
     </Card>
   );

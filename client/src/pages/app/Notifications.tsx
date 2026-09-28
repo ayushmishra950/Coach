@@ -2,9 +2,10 @@ import { Bell, CheckCheck, Info, Mail, MessageCircle, Send, Smartphone, type Luc
 import { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { NOTIF_ICON } from '../../components/NotificationBell';
+import { Pager } from '../../components/Pager';
 import { Badge, Button, Card, EmptyState, ErrorState, PageHeader, Skeleton, Tabs, clsx, type BadgeTone } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
-import { useApi } from '../../hooks/useApi';
+import { usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
 import { fmtDateTime, timeAgo } from '../../lib/format';
 import type { Notification } from '../../lib/types';
@@ -24,26 +25,28 @@ const CHANNELS: { key: Channel; label: string; icon: LucideIcon; cls: string }[]
 const STATUS_TONE: Record<DStatus, BadgeTone> = { sent: 'green', queued: 'blue', failed: 'red', skipped: 'gray' };
 const AUD_TONE: Record<Notification['audience'], BadgeTone> = { parent: 'violet', staff: 'blue', owner: 'brand' };
 
-interface LogData { items: Notification[]; byChannel: { channel: Channel; status: DStatus; count: number }[] }
+interface LogExtra { byChannel: { channel: Channel; status: DStatus; count: number }[] }
 
 function Inbox() {
-  const { data, loading, error, reload, setData } = useApi<{ items: Notification[]; unread: number }>('/notifications', { limit: 100 });
   const [filter, setFilter] = useState<Filter>('all');
+  // Type / unread filters run on the server, so every page of a filter is complete.
+  const list = usePagedApi<Notification, { unread: number; counts: Record<string, number> }>('/notifications', {
+    type: filter !== 'all' && filter !== 'unread' ? filter : undefined,
+    unread: filter === 'unread' ? '1' : undefined,
+  });
+  const { data, loading, error, reload, setData } = list;
   const [marking, setMarking] = useState(false);
 
-  const items = data?.items ?? [];
-  const counts = useMemo(() => {
-    const c: Partial<Record<NType, number>> = {};
-    items.forEach((n) => { c[n.type] = (c[n.type] ?? 0) + 1; });
-    return c;
-  }, [items]);
-  const shown = items.filter((n) => (filter === 'all' ? true : filter === 'unread' ? !n.read : n.type === filter));
+  const items = useMemo(() => data?.items ?? [], [data]);
+  const counts = data?.counts ?? {};
+  const shown = items;
 
   const markAll = async () => {
     setMarking(true);
     try {
       await api.put('/notifications/read-all');
-      if (data) setData({ items: data.items.map((n) => ({ ...n, read: true })), unread: 0 });
+      if (data) setData({ ...data, items: data.items.map((n) => ({ ...n, read: true })), unread: 0 });
+      if (filter === 'unread') reload();
       toast.success('All caught up');
     } catch (e) {
       toast.error(errMsg(e));
@@ -54,16 +57,16 @@ function Inbox() {
 
   const markOne = async (n: Notification) => {
     if (n.read || !data) return;
-    setData({ items: data.items.map((x) => (x._id === n._id ? { ...x, read: true } : x)), unread: Math.max(0, data.unread - 1) });
+    setData({ ...data, items: data.items.map((x) => (x._id === n._id ? { ...x, read: true } : x)), unread: Math.max(0, data.unread - 1) });
     api.put(`/notifications/${n._id}/read`).catch(() => {});
   };
 
   if (error) return <ErrorState message={error} onRetry={reload} />;
 
   const tabs: { value: Filter; label: string; count?: number }[] = [
-    { value: 'all', label: 'All', count: items.length },
+    { value: 'all', label: 'All', count: counts.all ?? 0 },
     { value: 'unread', label: 'Unread', count: data?.unread ?? 0 },
-    ...(Object.keys(TYPE_LABEL) as NType[]).filter((t) => counts[t]).map((t) => ({ value: t as Filter, label: TYPE_LABEL[t], count: counts[t] })),
+    ...(Object.keys(TYPE_LABEL) as NType[]).filter((t) => (counts[t] ?? 0) > 0 || filter === t).map((t) => ({ value: t as Filter, label: TYPE_LABEL[t], count: counts[t] ?? 0 })),
   ];
 
   return (
@@ -76,7 +79,7 @@ function Inbox() {
         {loading && !data ? (
           <div className="space-y-3 p-5">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16" />)}</div>
         ) : shown.length === 0 ? (
-          <EmptyState title={filter === 'unread' ? "You're all caught up 🎉" : 'No notifications yet'} text="Alerts about attendance, fees, tests and announcements will show up here." />
+          <EmptyState title={filter === 'unread' ? "You're all caught up 🎉" : filter === 'all' ? 'No notifications yet' : 'Nothing here yet'} text="Alerts about attendance, fees, tests and announcements will show up here." />
         ) : (
           <ul className="divide-y divide-slate-100">
             {shown.map((n) => {
@@ -99,6 +102,7 @@ function Inbox() {
             })}
           </ul>
         )}
+        {list.pager && <Pager {...list.pager} noun="notifications" />}
       </Card>
     </div>
   );
@@ -107,7 +111,8 @@ function Inbox() {
 function MessageLog() {
   const [type, setType] = useState<'all' | NType>('all');
   const [audience, setAudience] = useState<'all' | Notification['audience']>('all');
-  const { data, loading, error, reload } = useApi<LogData>('/notifications/log', { type, audience });
+  const list = usePagedApi<Notification, LogExtra>('/notifications/log', { type, audience });
+  const { data, loading, error, reload } = list;
 
   const summary = useMemo(() => {
     const m: Record<string, { total: number; byStatus: Partial<Record<DStatus, number>> }> = {};
@@ -126,8 +131,8 @@ function MessageLog() {
       <div className="flex gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
         <Info className="mt-0.5 h-5 w-5 shrink-0 text-sky-600" />
         <p>
-          In-app notifications are delivered instantly. <b>WhatsApp, Email and SMS run in demo mode</b> — messages are logged as
-          “queued” until a provider (e.g. WhatsApp Business API, SMTP, SMS gateway) is connected in <code className="rounded bg-white/70 px-1 py-0.5 text-xs">server/src/services/notify.ts</code>.
+          In-app notifications work now and are delivered instantly. <b>WhatsApp, SMS and email need a provider connected by your CoachFlow administrator</b> —
+          until then, those messages are shown here as “queued” or “skipped”.
         </p>
       </div>
 
@@ -214,6 +219,7 @@ function MessageLog() {
             </table>
           </div>
         )}
+        {list.pager && <Pager {...list.pager} noun="messages" />}
       </Card>
     </div>
   );

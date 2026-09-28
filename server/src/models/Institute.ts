@@ -1,3 +1,4 @@
+import { authDataChanged } from '../utils/cache.js';
 import { Schema, model, InferSchemaType, HydratedDocument } from 'mongoose';
 
 const instituteSchema = new Schema(
@@ -16,6 +17,16 @@ const instituteSchema = new Schema(
     status: { type: String, enum: ['trial', 'active', 'past_due', 'cancelled', 'suspended'], default: 'trial' },
     trialEndsAt: Date,
     currentPeriodEnd: Date,
+    /** Owner cancelled: the paid plan keeps working until currentPeriodEnd, then drops to Starter. */
+    cancelAtPeriodEnd: { type: Boolean, default: false },
+    /** When the account became cancelled (for churn figures). */
+    cancelledAt: Date,
+    gstin: { type: String, trim: true },
+    /** Set by the Super Admin. While suspended, nobody from this institute can log in. */
+    suspendedAt: Date,
+    suspendedReason: String,
+    /** Status to go back to when the institute is reactivated. */
+    statusBeforeSuspend: { type: String, enum: ['trial', 'active', 'past_due', 'cancelled'] },
     settings: {
       channels: {
         inApp: { type: Boolean, default: true },
@@ -31,14 +42,27 @@ const instituteSchema = new Schema(
       },
       absentAlertAfter: { type: Number, default: 3 },
       notifyParentOnAbsence: { type: Boolean, default: true },
+      /** Days with no classes (festivals, exams). Shown in the register instead of "not marked". */
+      holidays: [{ _id: false, date: { type: String, required: true }, name: { type: String, default: 'Holiday' } }],
+      /** Teachers may change attendance up to this many days back (the owner always can). */
+      attendanceEditDays: { type: Number, default: 7 },
+      /** Printed before receipt numbers, e.g. ABC → ABC/2026-27/0001. */
+      receiptPrefix: { type: String, trim: true, maxlength: 12 },
     },
     counters: {
       student: { type: Number, default: 0 },
       receipt: { type: Number, default: 0 },
+      /** Financial year (e.g. "2026-27") the receipt counter belongs to; it restarts every April. */
+      receiptFy: String,
     },
   },
   { timestamps: true },
 );
+
+// Drop cached logins / institutes so disables, suspensions and password resets apply at once.
+for (const h of ['save', 'updateOne', 'updateMany', 'findOneAndUpdate', 'deleteOne', 'deleteMany', 'findOneAndDelete'] as const) {
+  instituteSchema.post(h, () => authDataChanged());
+}
 
 export type InstituteT = InferSchemaType<typeof instituteSchema>;
 export type InstituteDoc = HydratedDocument<InstituteT>;

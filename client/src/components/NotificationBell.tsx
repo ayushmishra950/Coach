@@ -1,7 +1,9 @@
 import { Bell, CalendarCheck, CheckCheck, IndianRupee, Megaphone, ClipboardList, Info, Wallet } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../lib/api';
+import toast from 'react-hot-toast';
+import { useRealtime, useSocketEvent } from '../context/RealtimeContext';
+import { api, errMsg } from '../lib/api';
 import { timeAgo } from '../lib/format';
 import type { Notification } from '../lib/types';
 import { clsx } from './ui';
@@ -20,23 +22,52 @@ export function NotificationBell({ allHref }: { allHref: string }) {
   const [items, setItems] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
+  const { connected } = useRealtime();
 
+  // Light request: latest 10 + a capped unread count (no totals, no per-type counts).
   const load = () =>
-    api.get<{ items: Notification[]; unread: number }>('/notifications', { params: { limit: 8 } })
+    api.get<{ items: Notification[]; unread: number }>('/notifications', { params: { light: 1 } })
       .then(({ data }) => { setItems(data.items); setUnread(data.unread); })
       .catch(() => {});
 
+  // Live: the server pushes every new notification — add it here instead of re-fetching the
+  // inbox (an announcement to 2,000 parents would otherwise cause 2,000 reloads at once).
+  useSocketEvent<Notification & { audience: string }>('notification:new', (n) => {
+    setItems((cur) => (cur.some((x) => x._id === n._id) ? cur : [{ ...n, read: false }, ...cur].slice(0, 10)));
+    setUnread((u) => Math.min(u + 1, 100));
+    // The owner already sees a success message when they collect a fee themselves.
+    if (!(n.audience === 'owner' && n.type === 'payment')) toast(n.title, { icon: '🔔', duration: 3500 });
+  });
+
   useEffect(() => {
     load();
-    const t = setInterval(load, 60_000);
     const onDoc = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
     document.addEventListener('mousedown', onDoc);
-    return () => { clearInterval(t); document.removeEventListener('mousedown', onDoc); };
+    return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
+  // Poll only as a fallback: while the live connection is down and the tab is visible.
+  useEffect(() => {
+    if (connected) return;
+    const t = setInterval(() => document.visibilityState === 'visible' && load(), 120_000);
+    return () => clearInterval(t);
+  }, [connected]);
+
+  // Catch up on anything missed while the live connection was down (skip the very first connect —
+  // the mount effect already loaded the inbox).
+  const wasConnected = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (connected && wasConnected.current === false) load();
+    wasConnected.current = connected;
+  }, [connected]);
+
   const markAll = async () => {
-    await api.put('/notifications/read-all');
-    load();
+    try {
+      await api.put('/notifications/read-all');
+      load();
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not mark notifications as read'));
+    }
   };
 
   return (
@@ -45,7 +76,7 @@ export function NotificationBell({ allHref }: { allHref: string }) {
         <Bell className="h-5 w-5" />
         {unread > 0 && (
           <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
-            {unread > 9 ? '9+' : unread}
+            {unread > 99 ? '99+' : unread}
           </span>
         )}
       </button>

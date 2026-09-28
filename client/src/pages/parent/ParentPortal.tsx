@@ -1,29 +1,34 @@
 import {
-  Bell, BookOpen, CalendarCheck, CalendarClock, CheckCircle2, ClipboardList, Clock, CreditCard, IndianRupee, LogOut, Megaphone, Phone, Receipt, ShieldCheck, User,
+  Bell, BookOpen, CalendarCheck, CalendarClock, CheckCircle2, ClipboardList, Clock, CreditCard, IndianRupee, LogOut, Megaphone, MessageCircle, Phone, Receipt, ShieldCheck, User,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Logo } from '../../components/Logo';
 import { NOTIF_ICON, NotificationBell } from '../../components/NotificationBell';
 import { Badge, Button, EmptyState, ErrorState, Modal, PageLoader, StatusBadge, clsx } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
-import { useApi } from '../../hooks/useApi';
+import { useRealtime } from '../../context/RealtimeContext';
+import { Pager } from '../../components/Pager';
+import { useApi, useClientPage, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
-import { fmtDate, fmtDateShort, fmtTime, inr, pctTone, timeAgo, ymd } from '../../lib/format';
+import { fmtDate, fmtDateShort, fmtTime, inr, pctTone, timeAgo, toDate, ymd } from '../../lib/format';
 import type { Announcement, Invoice, Notification, Payment } from '../../lib/types';
 
 interface Child {
   student: { _id: string; name: string; studentCode: string; course?: string };
   batches: { _id: string; name: string; subject?: string; days: string[]; startTime: string; endTime: string; teacher?: string }[];
   attendance: { pct: number; total: number; present: number; recent: { date: string; batch?: string; status?: 'present' | 'absent' | 'late' }[] };
-  results: { _id: string; subject: string; topic?: string; date: string; maxMarks: number; marks: number | null; absent: boolean; pct: number | null }[];
+  results: {
+    _id: string; subject: string; topic?: string; date: string; maxMarks: number; marks: number | null; absent: boolean; pct: number | null;
+    passPercent?: number; remark?: string | null;
+  }[];
   latestResult: Child['results'][number] | null;
-  fees: { total: number; paid: number; pending: number; invoices: Invoice[]; payments: Payment[] };
+  fees: { total: number; paid: number; pending: number; invoices: Invoice[]; payments: ParentPayment[] };
   nextClass: { at: string; batch: string; subject?: string } | null;
 }
 interface Overview {
-  institute: { name: string; phone?: string; brandColor?: string };
+  institute: { name: string; phone?: string; brandColor?: string; onlinePay?: boolean };
   children: Child[];
   announcements: Omit<Announcement, 'batchIds'>[];
 }
@@ -32,13 +37,41 @@ const timeOf = (iso: string) => {
   const d = new Date(iso);
   return fmtTime(`${d.getHours()}:${d.getMinutes()}`);
 };
-const isOverdue = (i: Invoice) => i.status !== 'paid' && new Date(i.dueDate) < new Date();
+/** Pager as the last thing inside a padded Section: its top border spans the whole card. */
+const SECTION_PAGER = '-mx-5 -mb-5 mt-4 sm:-mx-6 sm:-mb-6';
+/** Pager in the middle of a Section (more content follows it). */
+const INLINE_PAGER = 'mt-3 !px-0 sm:!px-0 !pb-0';
+type ParentPayment = Payment & { status?: 'valid' | 'void'; balanceAfter?: number };
+/**
+ * Overdue = due date before today (local); on the due date itself it is "due today".
+ * The server stores dueDate as local midnight (Asia/Kolkata), so compare the instant against
+ * the start of today / tomorrow rather than re-deriving a calendar day from a UTC string.
+ */
+const dueState = (i: Invoice): 'overdue' | 'today' | null => {
+  if (i.status === 'paid' || !i.dueDate) return null;
+  const due = toDate(i.dueDate).getTime();
+  if (Number.isNaN(due)) return null;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(start);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return due < start.getTime() ? 'overdue' : due < tomorrow.getTime() ? 'today' : null;
+};
 
 export default function ParentPortal() {
   const { session, logout } = useAuth();
+  const { chatUnread } = useRealtime();
   const { data, loading, error, status, reload } = useApi<Overview>('/parent/overview');
   const [idx, setIdx] = useState(0);
   const child = data?.children[Math.min(idx, (data?.children.length ?? 1) - 1)];
+  const location = useLocation();
+  // The bell's "View all" links to #notifications — router hash links don't scroll by themselves.
+  // Keyed on location.key so clicking it again (same hash) still scrolls.
+  useEffect(() => {
+    if (location.hash !== '#notifications') return;
+    const t = window.setTimeout(() => document.getElementById('notifications')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    return () => window.clearTimeout(t);
+  }, [location.hash, location.key, !!data]);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-brand-50/70 via-slate-50 to-slate-50">
@@ -51,10 +84,24 @@ export default function ParentPortal() {
             )}
           </div>
           <div className="flex items-center gap-1">
+            {status !== 402 && (
+              <Link to="/portal/messages" className="relative flex items-center gap-1.5 rounded-xl p-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900" title="Messages" aria-label="Messages">
+                <MessageCircle className="h-5 w-5" />
+                <span className="hidden sm:inline">Messages</span>
+                {chatUnread > 0 && (
+                  <span className="absolute left-6 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
+                    {chatUnread > 9 ? '9+' : chatUnread}
+                  </span>
+                )}
+              </Link>
+            )}
             <NotificationBell allHref="#notifications" />
-            <div className="ml-1 hidden items-center gap-2 rounded-xl bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 sm:flex">
-              <User className="h-4 w-4 text-slate-400" /> {session?.user.name}
-            </div>
+            <Link to="/portal/account" title="My account" aria-label="My account"
+              className="ml-1 flex items-center gap-2 rounded-xl p-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 sm:bg-slate-100 sm:px-3 sm:py-1.5 sm:text-slate-700 sm:hover:bg-slate-200">
+              <User className="h-5 w-5 text-slate-400 sm:h-4 sm:w-4" />
+              <span className="hidden sm:inline">{session?.user.name}</span>
+              <span className="hidden text-xs font-medium text-brand-600 sm:inline">· My account</span>
+            </Link>
             <button onClick={logout} className="rounded-xl p-2.5 text-slate-500 hover:bg-rose-50 hover:text-rose-600" title="Log out" aria-label="Log out">
               <LogOut className="h-5 w-5" />
             </button>
@@ -69,7 +116,7 @@ export default function ParentPortal() {
           <div className="card card-pad mx-auto mt-10 max-w-md text-center">
             <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-brand-50 text-3xl">🏫</div>
             <h2 className="mt-4 text-xl font-extrabold text-slate-900">Parent portal not available yet</h2>
-            <p className="mt-2 text-sm text-slate-500">Your institute's plan doesn't include the parent portal yet. Please contact the institute for updates about your child.</p>
+            <p className="mt-2 text-sm text-slate-500">The parent portal isn’t switched on for your institute yet. Please contact the institute for updates about your child.</p>
             <Button variant="secondary" className="mt-6" icon={<LogOut className="h-4 w-4" />} onClick={logout}>Log out</Button>
           </div>
         ) : error || !data ? (
@@ -81,6 +128,10 @@ export default function ParentPortal() {
             <div className="mb-5">
               <p className="text-sm text-slate-500">Namaste, {session?.user.name?.split(' ')[0]} 👋</p>
               <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">Here's how {child.student.name.split(' ')[0]} is doing</h1>
+              <Link to="/portal/messages" className="mt-3 inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-brand-700 shadow-sm ring-1 ring-brand-100 transition hover:ring-brand-300">
+                <MessageCircle className="h-4 w-4" />
+                {chatUnread > 0 ? `You have ${chatUnread} unread message${chatUnread > 1 ? 's' : ''}` : 'Message the teacher or institute'}
+              </Link>
             </div>
 
             {data.children.length > 1 && (
@@ -218,7 +269,7 @@ function ChildView({ child, announcements, institute, onReload }: { child: Child
       </nav>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <FeesSection fees={fees} onReload={onReload} />
+        <FeesSection fees={fees} onReload={onReload} onlinePay={!!institute.onlinePay} phone={institute.phone} />
         <ResultsSection results={child.results} />
         <AttendanceSection attendance={attendance} />
         <ScheduleSection batches={child.batches} />
@@ -238,12 +289,14 @@ function ChildView({ child, announcements, institute, onReload }: { child: Child
 
 /* ------------------------------------------------------------------ */
 
-function FeesSection({ fees, onReload }: { fees: Child['fees']; onReload: () => void }) {
+function FeesSection({ fees, onReload, onlinePay, phone }: { fees: Child['fees']; onReload: () => void; onlinePay: boolean; phone?: string }) {
   const navigate = useNavigate();
   const [payInv, setPayInv] = useState<Invoice | null>(null);
   const [paying, setPaying] = useState(false);
   const [done, setDone] = useState<Payment | null>(null);
   const paidPct = fees.total ? Math.round((fees.paid / fees.total) * 100) : 0;
+  const invPage = useClientPage(fees.invoices);
+  const payPage = useClientPage(fees.payments);
 
   const pay = async () => {
     if (!payInv) return;
@@ -280,39 +333,50 @@ function FeesSection({ fees, onReload }: { fees: Child['fees']; onReload: () => 
       </div>
       {fees.invoices.length === 0 ? <p className="py-6 text-center text-sm text-slate-400">No fee installments yet.</p> : (
         <ul className="space-y-2.5">
-          {fees.invoices.map((inv) => {
+          {invPage.items.map((inv) => {
             const due = inv.amount - inv.paidAmount;
-            const overdue = isOverdue(inv);
+            const state = dueState(inv);
+            const overdue = state === 'overdue';
             return (
               <li key={inv._id} className={clsx('flex items-center justify-between gap-3 rounded-2xl border p-3.5', overdue ? 'border-rose-200 bg-rose-50/50' : 'border-slate-100')}>
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-slate-800">{inv.title}</p>
                   <p className="text-xs text-slate-500">{inr(inv.amount)} · due {fmtDate(inv.dueDate)}</p>
-                  <div className="mt-1"><StatusBadge status={overdue ? 'overdue' : inv.status} /></div>
+                  <div className="mt-1">{state === 'today' ? <Badge tone="amber">Due today</Badge> : <StatusBadge status={overdue ? 'overdue' : inv.status} />}</div>
                 </div>
                 {inv.status === 'paid' ? (
                   <CheckCircle2 className="h-6 w-6 shrink-0 text-emerald-500" />
-                ) : (
+                ) : onlinePay ? (
                   <Button size="sm" variant="premium" icon={<CreditCard className="h-3.5 w-3.5" />} onClick={() => setPayInv(inv)}>PAY {inr(due)}</Button>
+                ) : (
+                  <span className="shrink-0 text-right text-xs font-semibold text-slate-500">{inr(due)} due<br /><span className="font-normal">Pay at the institute{phone ? ` · ${phone}` : ''}</span></span>
                 )}
               </li>
             );
           })}
         </ul>
       )}
+      <Pager {...invPage.pager} noun="installments" className={fees.payments.length > 0 ? INLINE_PAGER : SECTION_PAGER} />
       {fees.payments.length > 0 && (
         <div className="mt-4 border-t border-slate-100 pt-3">
           <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">Receipts</p>
           <ul className="space-y-1">
-            {fees.payments.slice(0, 5).map((p) => (
+            {payPage.items.map((p) => {
+              const isVoid = p.status === 'void';
+              return (
               <li key={p._id}>
-                <button onClick={() => navigate(`/portal/receipt/${p._id}`)} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
-                  <span className="flex items-center gap-2 text-slate-600"><Receipt className="h-4 w-4 text-slate-400" /> #{p.receiptNo} · {fmtDateShort(p.paidAt)}</span>
-                  <b className="text-slate-800">{inr(p.amount)}</b>
+                <button onClick={() => navigate(`/portal/receipt/${p._id}`)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
+                  <span className={clsx('flex min-w-0 items-center gap-2', isVoid ? 'text-slate-400 line-through' : 'text-slate-600')}><Receipt className="h-4 w-4 shrink-0 text-slate-400" /> <span className="truncate">#{p.receiptNo} · {fmtDateShort(p.paidAt)}</span></span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    {isVoid && <Badge tone="gray">Cancelled</Badge>}
+                    <b className={isVoid ? 'text-slate-400 line-through' : 'text-slate-800'}>{inr(p.amount)}</b>
+                  </span>
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
+          <Pager {...payPage.pager} noun="receipts" className={SECTION_PAGER} />
         </div>
       )}
 
@@ -345,30 +409,43 @@ function FeesSection({ fees, onReload }: { fees: Child['fees']; onReload: () => 
 }
 
 function ResultsSection({ results }: { results: Child['results'] }) {
+  const page = useClientPage(results);
   return (
     <Section id="results" title="Results" icon={<ClipboardList className="h-4 w-4" />}>
       {results.length === 0 ? <p className="py-6 text-center text-sm text-slate-400">No published results yet.</p> : (
         <ul className="space-y-3">
-          {results.slice(0, 8).map((r) => (
+          {page.items.map((r) => {
+            const pass = r.passPercent ?? 40;
+            const passed = r.pct != null && r.pct >= pass;
+            return (
             <li key={r._id}>
               <div className="flex items-baseline justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold text-slate-800">{r.subject}{r.topic ? <span className="font-normal text-slate-400"> · {r.topic}</span> : null}</p>
-                  <p className="text-xs text-slate-400">{fmtDate(r.date)}</p>
+                  <p className="text-xs text-slate-400">{fmtDate(toDate(r.date))}</p>
                 </div>
                 <p className="shrink-0 text-sm font-extrabold text-slate-900">
-                  {r.absent ? <Badge tone="red">Absent</Badge> : <>{r.marks}/{r.maxMarks} <span className={clsx('ml-1', pctTone(r.pct))}>{r.pct}%</span></>}
+                  {r.absent ? <Badge tone="red">Absent</Badge> : (
+                    <>
+                      {r.marks}/{r.maxMarks} <span className={clsx('ml-1', r.pct == null ? 'text-slate-400' : passed ? 'text-emerald-600' : 'text-rose-600')}>{r.pct}%</span>
+                      {r.pct != null && <Badge tone={passed ? 'green' : 'red'} className="ml-1.5 align-middle">{passed ? 'Pass' : 'Below pass mark'}</Badge>}
+                    </>
+                  )}
                 </p>
               </div>
               {!r.absent && r.pct != null && (
-                <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div className={clsx('h-full rounded-full', r.pct >= 85 ? 'bg-emerald-500' : r.pct >= 70 ? 'bg-amber-500' : 'bg-rose-500')} style={{ width: `${r.pct}%` }} />
+                <div className="relative mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100" title={`Pass mark ${pass}%`}>
+                  <div className={clsx('h-full rounded-full', !passed ? 'bg-rose-500' : r.pct >= Math.max(75, pass + 20) ? 'bg-emerald-500' : 'bg-amber-500')} style={{ width: `${Math.max(0, Math.min(100, r.pct))}%` }} />
+                  <span className="absolute inset-y-0 w-0.5 bg-slate-400/70" style={{ left: `${Math.min(100, pass)}%` }} />
                 </div>
               )}
+              {r.remark && <p className="mt-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600"><span className="font-semibold text-slate-700">Teacher’s remark:</span> {r.remark}</p>}
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
+      <Pager {...page.pager} noun="results" className={SECTION_PAGER} />
     </Section>
   );
 }
@@ -384,6 +461,7 @@ function AttendanceSection({ attendance }: { attendance: Child['attendance'] }) 
     d.setDate(d.getDate() - (29 - i));
     return { key: ymd(d), d, status: byDate.get(ymd(d)) };
   });
+  const page = useClientPage(attendance.recent);
   const dot = (s?: string) => (s === 'present' ? 'bg-emerald-500 text-white' : s === 'absent' ? 'bg-rose-500 text-white' : s === 'late' ? 'bg-amber-400 text-white' : 'bg-slate-100 text-slate-400');
 
   return (
@@ -404,11 +482,11 @@ function AttendanceSection({ attendance }: { attendance: Child['attendance'] }) 
         <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-slate-200" /> No class</span>
       </div>
       {attendance.recent.length > 0 && (
-        <ul className="mt-4 max-h-56 divide-y divide-slate-100 overflow-y-auto border-t border-slate-100 scrollbar-thin">
-          {attendance.recent.slice(0, 15).map((r, i) => (
-            <li key={`${r.date}-${i}`} className="flex items-center justify-between gap-2 py-2 text-sm">
+        <ul className="mt-4 divide-y divide-slate-100 border-t border-slate-100">
+          {page.items.map((r, i) => (
+            <li key={`${r.date}-${page.offset + i}`} className="flex items-center justify-between gap-2 py-2 text-sm">
               <div className="min-w-0">
-                <p className="font-medium text-slate-700">{fmtDate(r.date, { weekday: 'short', day: 'numeric', month: 'short' })}</p>
+                <p className="font-medium text-slate-700">{fmtDate(toDate(r.date), { weekday: 'short', day: 'numeric', month: 'short' })}</p>
                 <p className="truncate text-xs text-slate-400">{r.batch}</p>
               </div>
               {r.status && <StatusBadge status={r.status} />}
@@ -416,6 +494,7 @@ function AttendanceSection({ attendance }: { attendance: Child['attendance'] }) 
           ))}
         </ul>
       )}
+      <Pager {...page.pager} noun="classes" className={SECTION_PAGER} />
     </Section>
   );
 }
@@ -444,11 +523,12 @@ function ScheduleSection({ batches }: { batches: Child['batches'] }) {
 }
 
 function AnnouncementsSection({ items }: { items: Overview['announcements'] }) {
+  const page = useClientPage(items);
   return (
     <Section id="announcements" title="Announcements" icon={<Megaphone className="h-4 w-4" />}>
       {items.length === 0 ? <p className="py-6 text-center text-sm text-slate-400">No announcements right now.</p> : (
         <ul className="space-y-3">
-          {items.map((a) => (
+          {page.items.map((a) => (
             <li key={a._id} className={clsx('rounded-2xl p-3.5', a.pinned ? 'bg-amber-50 ring-1 ring-amber-200' : 'bg-slate-50')}>
               <p className="text-sm font-bold text-slate-800">{a.pinned && '📌 '}{a.title}</p>
               <p className="mt-1 whitespace-pre-line text-sm text-slate-600">{a.body}</p>
@@ -457,19 +537,21 @@ function AnnouncementsSection({ items }: { items: Overview['announcements'] }) {
           ))}
         </ul>
       )}
+      <Pager {...page.pager} noun="announcements" className={SECTION_PAGER} />
     </Section>
   );
 }
 
 function NotificationsSection() {
-  const { data, loading } = useApi<{ items: Notification[]; unread: number }>('/notifications', { limit: 20 });
+  const list = usePagedApi<Notification, { unread: number }>('/notifications');
+  const { data, loading } = list;
   return (
     <Section id="notifications" title="Notifications" icon={<Bell className="h-4 w-4" />}
       action={data?.unread ? <Badge tone="brand">{data.unread} new</Badge> : undefined}>
       {loading && !data ? <p className="py-6 text-center text-sm text-slate-400">Loading…</p> : !data?.items.length ? (
         <p className="py-6 text-center text-sm text-slate-400">You're all caught up 🎉</p>
       ) : (
-        <ul className="max-h-96 space-y-1 overflow-y-auto scrollbar-thin">
+        <ul className={clsx('space-y-1 transition-opacity', loading && 'opacity-60')}>
           {data.items.map((n) => {
             const I = NOTIF_ICON[n.type] ?? NOTIF_ICON.system;
             return (
@@ -486,6 +568,7 @@ function NotificationsSection() {
           })}
         </ul>
       )}
+      {list.pager && <Pager {...list.pager} noun="notifications" className={SECTION_PAGER} />}
     </Section>
   );
 }

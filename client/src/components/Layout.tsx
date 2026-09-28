@@ -1,17 +1,18 @@
 import {
   BarChart3, Bell, BookOpen, Building2, CalendarCheck, ClipboardList, CreditCard, Crown, GraduationCap, IndianRupee,
-  LayoutDashboard, LifeBuoy, LogOut, Megaphone, Menu, Settings, Sparkles, UserSquare2, X, type LucideIcon,
+  LayoutDashboard, LifeBuoy, LogOut, Megaphone, Menu, MessageCircle, ScrollText, Settings, Sparkles, UserRound, UserSquare2, X, type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useRealtime } from '../context/RealtimeContext';
 import type { FeatureKey } from '../lib/types';
 import { Logo } from './Logo';
 import { NotificationBell } from './NotificationBell';
 import { Avatar, Button, Modal, clsx } from './ui';
 import { FEATURE_INFO } from '../lib/features';
 
-interface NavItem { to: string; label: string; icon: LucideIcon; end?: boolean; feature?: FeatureKey; section?: string }
+interface NavItem { to: string; label: string; icon: LucideIcon; end?: boolean; feature?: FeatureKey; section?: string; chatBadge?: boolean }
 
 const OWNER_NAV: NavItem[] = [
   { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -21,12 +22,14 @@ const OWNER_NAV: NavItem[] = [
   { to: '/app/attendance', label: 'Attendance', icon: CalendarCheck, section: 'Daily work' },
   { to: '/app/fees', label: 'Fees', icon: IndianRupee },
   { to: '/app/tests', label: 'Tests & Marks', icon: ClipboardList },
+  { to: '/app/messages', label: 'Messages', icon: MessageCircle, chatBadge: true },
   { to: '/app/announcements', label: 'Announcements', icon: Megaphone },
   { to: '/app/reports', label: 'Reports', icon: BarChart3, section: 'Insights' },
   { to: '/app/insights', label: 'AI Insights', icon: Sparkles, feature: 'aiInsights' },
   { to: '/app/notifications', label: 'Notifications', icon: Bell },
   { to: '/app/subscription', label: 'Subscription', icon: Crown, section: 'Account' },
   { to: '/app/settings', label: 'Settings', icon: Settings },
+  { to: '/app/account', label: 'My account', icon: UserRound },
 ];
 
 const TEACHER_NAV: NavItem[] = [
@@ -35,8 +38,10 @@ const TEACHER_NAV: NavItem[] = [
   { to: '/app/tests', label: 'Tests & Marks', icon: ClipboardList },
   { to: '/app/batches', label: 'My Batches', icon: BookOpen },
   { to: '/app/students', label: 'My Students', icon: GraduationCap },
+  { to: '/app/messages', label: 'Messages', icon: MessageCircle, chatBadge: true },
   { to: '/app/announcements', label: 'Announcements', icon: Megaphone },
   { to: '/app/notifications', label: 'Notifications', icon: Bell, section: 'Account' },
+  { to: '/app/account', label: 'My account', icon: UserRound },
 ];
 
 const ADMIN_NAV: NavItem[] = [
@@ -45,10 +50,13 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/payments', label: 'Payments', icon: CreditCard },
   { to: '/admin/tickets', label: 'Support', icon: LifeBuoy },
   { to: '/admin/plans', label: 'Plans & Pricing', icon: Crown, section: 'Configuration' },
+  { to: '/admin/audit', label: 'Audit log', icon: ScrollText },
+  { to: '/admin/account', label: 'My account', icon: UserRound },
 ];
 
 function Sidebar({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
   const { session, hasFeature, logout } = useAuth();
+  const { chatUnread } = useRealtime();
   const inst = session?.institute;
   const isAdmin = session?.user.role === 'superadmin';
   return (
@@ -63,7 +71,10 @@ function Sidebar({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => v
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-white">{inst.name}</p>
-            <p className="text-xs capitalize text-slate-400">{session?.plan?.name ?? inst.plan} plan{inst.status === 'trial' ? ' · Trial' : ''}</p>
+            {/* Only the owner sees the CoachFlow plan; teachers just see their role. */}
+            <p className="text-xs capitalize text-slate-400">
+              {session?.user.role === 'owner' ? `${session?.plan?.name ?? inst.plan} plan${inst.status === 'trial' ? ' · Trial' : ''}` : session?.user.role}
+            </p>
           </div>
         </div>
       )}
@@ -78,6 +89,9 @@ function Sidebar({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => v
               <it.icon className="h-[18px] w-[18px]" />
               <span className="flex-1">{it.label}</span>
               {it.feature && !hasFeature(it.feature) && <Crown className="h-3.5 w-3.5 text-amber-300" />}
+              {it.chatBadge && chatUnread > 0 && (
+                <span className="grid h-5 min-w-5 place-items-center rounded-full bg-rose-500 px-1.5 text-[10px] font-bold text-white">{chatUnread > 99 ? '99+' : chatUnread}</span>
+              )}
             </NavLink>
           </div>
         ))}
@@ -93,6 +107,8 @@ function Sidebar({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => v
 
 /** Global listener: when the API says UPGRADE_REQUIRED, show a friendly modal. */
 function UpgradeListener() {
+  const { session } = useAuth();
+  const isOwner = session?.user.role === 'owner';
   const [feature, setFeature] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const nav = useNavigate();
@@ -106,6 +122,19 @@ function UpgradeListener() {
     return () => window.removeEventListener('coachflow:upgrade', h);
   }, []);
   const info = feature && FEATURE_INFO[feature as FeatureKey];
+
+  // Plans, prices and upgrades are for the institute owner only. Anyone else just learns the
+  // feature isn't switched on for their institute — no upgrade button, no plan names.
+  if (!isOwner) {
+    return (
+      <Modal open={!!feature} onClose={() => setFeature(null)} size="sm" title="Not available yet"
+        footer={<Button onClick={() => setFeature(null)}>OK</Button>}>
+        <p className="text-sm text-slate-600">
+          {info ? `${info.label} isn’t switched on for your institute yet.` : 'This feature isn’t switched on for your institute yet.'} Please speak to your institute owner if you need it.
+        </p>
+      </Modal>
+    );
+  }
   return (
     <Modal open={!!feature} onClose={() => setFeature(null)} size="sm" title="✨ Time to upgrade"
       footer={<><Button variant="secondary" onClick={() => setFeature(null)}>Not now</Button><Button variant="premium" onClick={() => { setFeature(null); nav('/app/subscription'); }}><Crown className="h-4 w-4" /> View plans</Button></>}>
@@ -130,7 +159,7 @@ function TrialBanner() {
   if (inst.status === 'past_due' || inst.status === 'cancelled') {
     return (
       <div className="no-print bg-rose-600 px-4 py-2 text-center text-sm font-medium text-white">
-        {inst.status === 'past_due' ? 'Your last payment failed. Update billing to avoid interruption.' : 'Your subscription is cancelled — premium features are locked.'}{' '}
+        {inst.status === 'past_due' ? 'Your subscription period has ended. Renew now to keep your plan’s features.' : 'Your subscription is cancelled — premium features are locked.'}{' '}
         <Link to="/app/subscription" className="underline">Manage subscription</Link>
       </div>
     );
@@ -170,6 +199,7 @@ export function Shell({ variant }: { variant: 'app' | 'admin' }) {
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-slate-800 lg:hidden">{session?.institute?.name ?? 'CoachFlow Admin'}</p>
           </div>
+          {variant === 'app' && <HeaderChatLink />}
           {variant === 'app' && <NotificationBell allHref="/app/notifications" />}
           <div className="flex items-center gap-3 pl-1">
             <Avatar name={session?.user.name ?? '?'} size="sm" />
@@ -185,6 +215,20 @@ export function Shell({ variant }: { variant: 'app' | 'admin' }) {
       </div>
       {variant === 'app' && <UpgradeListener />}
     </div>
+  );
+}
+
+function HeaderChatLink() {
+  const { chatUnread } = useRealtime();
+  return (
+    <Link to="/app/messages" className="relative rounded-xl p-2.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800" aria-label="Messages" title="Messages">
+      <MessageCircle className="h-5 w-5" />
+      {chatUnread > 0 && (
+        <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
+          {chatUnread > 9 ? '9+' : chatUnread}
+        </span>
+      )}
+    </Link>
   );
 }
 

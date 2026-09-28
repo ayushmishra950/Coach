@@ -41,16 +41,18 @@ function BrandPanel() {
 export default function Register() {
   const { register } = useAuth();
   const navigate = useNavigate();
-  const [f, setF] = useState({ instituteName: '', ownerName: '', email: '', phone: '', city: '', type: 'School Tuition', password: '' });
+  const [f, setF] = useState({ instituteName: '', ownerName: '', email: '', phone: '', city: '', type: 'School Tuition', password: '', confirm: '' });
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (f.password.length < 6) return toast.error('Password must be at least 6 characters');
+    if (f.password.length < 8) return toast.error('Password must be at least 8 characters');
+    if (f.password !== f.confirm) return toast.error('Passwords do not match');
     setBusy(true);
     try {
-      await register(f);
+      const { confirm: _confirm, ...body } = f;
+      await register(body);
       toast.success('Your institute is ready! Enjoy 30 days of Premium 🎉');
       navigate('/app', { replace: true });
     } catch (err) {
@@ -84,7 +86,8 @@ export default function Register() {
             <Select label="Institute type" value={f.type} onChange={set('type')}>
               {TYPES.map((t) => <option key={t}>{t}</option>)}
             </Select>
-            <Input className="sm:col-span-2" label="Password" type="password" required autoComplete="new-password" placeholder="At least 6 characters" hint="Use 6+ characters" value={f.password} onChange={set('password')} />
+            <Input label="Password" type="password" required autoComplete="new-password" placeholder="At least 8 characters" hint="Use 8+ characters" value={f.password} onChange={set('password')} />
+            <Input label="Confirm password" type="password" required autoComplete="new-password" placeholder="Type it again" value={f.confirm} onChange={set('confirm')} />
             <Button type="submit" variant="premium" className="py-3 sm:col-span-2" loading={busy}>
               Start my free trial <ArrowRight className="h-4 w-4" />
             </Button>

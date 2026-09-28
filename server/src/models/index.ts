@@ -7,3 +7,4 @@ export * from './Attendance.js';
 export * from './Fee.js';
 export * from './Test.js';
 export * from './Misc.js';
+export * from './Chat.js';

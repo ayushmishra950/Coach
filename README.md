@@ -10,7 +10,7 @@ server/   Node + Express + TypeScript + MongoDB (Mongoose) + JWT
 ## Quick start
 
 ```bash
-npm run install:all     # installs root, server and client deps
+npm run install:all     # installs root, server and client deps (run again after pulling — adds socket.io)
 npm run dev             # API on :4600, web on :5173
 ```
 
@@ -40,7 +40,8 @@ The Login page also has one-click demo buttons. To reset the demo data, run `npm
 | **Online payment** | Parent **Pay Now**, which updates the payment record, generates a receipt and notifies the parent (demo gateway, Razorpay-ready hook) |
 | **Tests & marks** | Create tests, fast keyboard marks entry, average/highest/pass rate, distribution and toppers (Growth+), publish, which notifies parents |
 | **Parent portal** | Attendance, latest result, fees with Pay Now, next class, schedule, announcements, notifications |
-| **Notifications** | Central `notify()` service with pluggable channel adapters: in-app, WhatsApp, email and SMS (`server/src/services/notify.ts`), plus a full message log |
+| **Messages (live chat)** | Real-time 1-to-1 chat over Socket.IO, stored in MongoDB: owner ↔ teacher, owner ↔ parent, teacher ↔ parents of their students. Unread badges, read receipts (✓✓), typing indicator, online status, message history, offline fallback over REST |
+| **Notifications** | Central `notify()` service with pluggable channel adapters: in-app (pushed live over the socket), WhatsApp, email and SMS (`server/src/services/notify.ts`), plus a full message log |
 | **Reports** | Student, attendance, fee and batch reports, CSV export, print to PDF; advanced analytics on Premium |
 | **AI insights** | At-risk students, weak topics, improving/declining students, teacher insights, parent report generator (rule engine, ready for an LLM) |
 | **Plans & upgrade** | Starter, Growth and Premium feature gating enforced **server-side** (HTTP 402), contextual upgrade cards, subscription page with monthly/yearly billing, 30-day trial |
@@ -57,6 +58,34 @@ The Login page also has one-click demo buttons. To reset the demo data, run `npm
   - WhatsApp, email and SMS providers: `services/notify.ts`.
   - An LLM for richer AI summaries: `routes/insights.ts`.
 
+## Live chat & notifications
+
+- **Server:** `server/src/services/realtime.ts` (Socket.IO), `server/src/services/chat.ts` (rules, storage), `server/src/routes/chat.ts` (history + REST fallback).
+- **Client:** `client/src/context/RealtimeContext.tsx` (one socket per signed-in user), `client/src/pages/Messages.tsx` (`/app/messages`, `/portal/messages`).
+- Collections: `conversations` (one per pair of people, with each member's unread count and last-read time) and `messages`.
+- Who can chat: owner ↔ teachers on every plan; owner ↔ parents and teacher ↔ parents of students in their batches on plans with the parent portal. Parents appear once their portal login is created.
+- The socket re-checks the login on every message and every 10 minutes. Disabling a teacher or suspending an institute disconnects their live sessions at once.
+- Scaling to several API servers: add `@socket.io/redis-adapter` (rooms and presence are in memory today).
+
+## Environment (`server/.env`)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `JWT_SECRET` | dev secret | **Required in production** (32+ random characters) — the server refuses to start without it. |
+| `MONGO_URI` | embedded DB | Use MongoDB Atlas or another managed database in production. |
+| `CLIENT_URL` | `http://localhost:5173` | Allowed web origin(s), comma-separated. Also used by the chat socket. |
+| `APP_TIMEZONE` | `Asia/Kolkata` | All "today", due-date, attendance and monthly-report logic runs in this zone, whatever the server's own zone is. |
+| `DEMO_PAYMENTS` | on in dev, off in prod | Demo checkout / Pay Now. Keep off on a live site until Razorpay is connected. |
+| `TRUST_PROXY` | `false` | Set `true` behind Nginx / a load balancer so rate limits see real client IPs. |
+| `BILLING_GRACE_DAYS` | `3` | Days a paid plan keeps working after its period ends before falling back to Starter. |
+
+## Billing rules
+
+- When a paid period ends the institute becomes **Past due** (banner shown to the owner); after the grace days it falls back to Starter features until it renews.
+- Renewing early adds the new period on top of the remaining days.
+- A Super Admin who sets an institute to **Active** by hand (e.g. after an offline payment) starts a fresh billing period.
+- Super Admin → Institutes → Manage can generate a new password for an owner who forgot theirs.
+
 ## Production build
 
 ```bash
@@ -64,4 +93,4 @@ npm run build
 cd server && npm start      # serves the API and the built client from client/dist
 ```
 
-Before deploying, set `JWT_SECRET`, `MONGO_URI` and `CLIENT_URL` in `server/.env`.
+Before deploying, set `JWT_SECRET`, `MONGO_URI` and `CLIENT_URL` in `server/.env`. `npm start` runs with `NODE_ENV=production`, so demo payments are off unless `DEMO_PAYMENTS=true`.

@@ -81,7 +81,7 @@ function DashboardSkeleton() {
 
 function OwnerView({ d }: { d: OwnerDash }) {
   const { session } = useAuth();
-  const { data: plans } = useApi<Plan[]>(session?.plan?.key !== 'premium' ? '/public/plans' : null);
+  const { data: plans } = useApi<Plan[]>(session?.user.role === 'owner' && session?.plan?.key !== 'premium' ? '/public/plans' : null); // prices are for the owner only
   const premiumPrice = plans?.find((p) => p.key === 'premium')?.priceMonthly;
   const att = pctOf(d.todayAttendance.present, d.todayAttendance.total);
   const feeRate = pctOf(d.fees.collected, d.fees.total);
@@ -268,7 +268,7 @@ function OwnerView({ d }: { d: OwnerDash }) {
       </div>
 
       {session?.plan?.key === 'starter' && (
-        <UpgradeCard emoji="💰" title="Stop chasing fees manually" text="Automatic fee reminders + online payment collection unlock karein." />
+        <UpgradeCard emoji="💰" title="Stop chasing fees manually" text="Unlock automatic fee reminders and online payment collection." />
       )}
     </>
   );

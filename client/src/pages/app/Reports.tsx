@@ -1,18 +1,21 @@
 import {
   ArrowDown, ArrowUp, ArrowUpDown, BarChart3, CalendarCheck, Download, GraduationCap, IndianRupee, Layers, Printer, TrendingUp, Users, Wallet, AlertCircle, CalendarDays,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
+import { Pager } from '../../components/Pager';
 import { FeatureGate, UpgradeCard } from '../../components/Upgrade';
 import {
-  Badge, Card, CardHeader, ChartTooltip, EmptyState, ErrorState, PageHeader, PageLoader, Progress, SearchInput, StatCard, Tabs, Button, clsx,
+  Badge, Card, CardHeader, ChartTooltip, EmptyState, ErrorState, PageHeader, PageLoader, Progress, SearchInput, Skeleton, StatCard, Tabs, Button, clsx,
 } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
-import { useApi } from '../../hooks/useApi';
-import { downloadCSV, fmtDate, fmtDateShort, inr, inrShort, pctTone } from '../../lib/format';
+import { useApi, useClientPage, useDebounced, usePagedApi } from '../../hooks/useApi';
+import { api, errMsg } from '../../lib/api';
+import { downloadCSV, fmtDate, fmtDateShort, inr, inrShort, parseYmd, pctTone } from '../../lib/format';
 
 const PALETTE = ['#6366f1', '#8b5cf6', '#ec4899', '#10b981', '#f59e0b', '#0ea5e9'];
 
@@ -22,7 +25,9 @@ interface StudentRow {
   feePaid: number; feePending: number; feeOverdue: number;
 }
 interface BasicReport {
-  students: StudentRow[];
+  summary: { students: number; attendanceAvg: number | null; scoreAvg: number | null; lowAttendance: number; overdueStudents: number };
+  topScorers: StudentRow[];
+  defaulters: StudentRow[];
   attendanceDaily: { date: string; present: number; total: number; pct: number | null }[];
   fees: { total: number; collected: number; pending: number; overdue: number; thisMonth: number };
 }
@@ -55,9 +60,12 @@ export default function Reports() {
         title="Reports"
         subtitle={`Institute performance at a glance · generated ${fmtDate(new Date())}`}
         actions={
-          <div className="no-print flex gap-2">
-            <Button variant="secondary" icon={<Printer className="h-4 w-4" />} onClick={() => window.print()}>Print / PDF</Button>
-          </div>
+          // The Students tab has its own print button that prints every matching row.
+          tab === 'students' ? undefined : (
+            <div className="no-print flex gap-2">
+              <Button variant="secondary" icon={<Printer className="h-4 w-4" />} onClick={() => window.print()}>Print / PDF</Button>
+            </div>
+          )
         }
       />
       <Tabs
@@ -66,16 +74,16 @@ export default function Reports() {
         onChange={setTab}
         tabs={[
           { value: 'overview', label: 'Overview' },
-          { value: 'students', label: 'Students', count: data.students.length },
+          { value: 'students', label: 'Students', count: data.summary.students },
           { value: 'attendance', label: 'Attendance' },
           { value: 'fees', label: 'Fees' },
           { value: 'advanced', label: <span className="flex items-center gap-1">Advanced {!premium && <span className="text-[10px]">🔒</span>}</span> },
         ]}
       />
       {tab === 'overview' && <Overview data={data} premium={premium} onTab={setTab} />}
-      {tab === 'students' && <StudentsReport rows={data.students} />}
+      {tab === 'students' && <StudentsReport />}
       {tab === 'attendance' && <AttendanceReport daily={data.attendanceDaily} />}
-      {tab === 'fees' && <FeeReport fees={data.fees} rows={data.students} />}
+      {tab === 'fees' && <FeeReport fees={data.fees} defaulters={data.defaulters} overdueStudents={data.summary.overdueStudents} />}
       {tab === 'advanced' && (
         <FeatureGate feature="advancedReports" title="Unlock Advanced Reports" text="12-month revenue trends, weekly & monthly attendance, batch comparison and subject-wise analysis are available on Premium.">
           <AdvancedReports />
@@ -87,23 +95,18 @@ export default function Reports() {
 
 /* ------------------------------------------------------------------ */
 
-function avg(nums: (number | null)[]) {
-  const v = nums.filter((x): x is number => x != null);
-  return v.length ? Math.round(v.reduce((a, c) => a + c, 0) / v.length) : null;
-}
-
 function Overview({ data, premium, onTab }: { data: BasicReport; premium: boolean; onTab: (t: TabKey) => void }) {
-  const attAvg = avg(data.students.map((s) => s.attendancePct));
-  const scoreAvg = avg(data.students.map((s) => s.avgScore));
-  const lowAtt = data.students.filter((s) => s.attendancePct != null && s.attendancePct < 75).length;
+  const attAvg = data.summary.attendanceAvg;
+  const scoreAvg = data.summary.scoreAvg;
+  const lowAtt = data.summary.lowAttendance;
   const collectedPct = data.fees.total ? Math.round((data.fees.collected / data.fees.total) * 100) : 0;
-  const chart = data.attendanceDaily.filter((d) => d.pct != null).map((d) => ({ ...d, label: fmtDateShort(d.date) }));
-  const top = [...data.students].filter((s) => s.avgScore != null).sort((a, b) => (b.avgScore ?? 0) - (a.avgScore ?? 0)).slice(0, 5);
+  const chart = data.attendanceDaily.filter((d) => d.pct != null).map((d) => ({ ...d, label: fmtDateShort(parseYmd(d.date)) }));
+  const top = data.topScorers;
 
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Active students" value={data.students.length} icon={<Users className="h-5 w-5" />} tone="brand" hint={`${lowAtt} below 75% attendance`} />
+        <StatCard label="Active students" value={data.summary.students} icon={<Users className="h-5 w-5" />} tone="brand" hint={`${lowAtt} below 75% attendance`} />
         <StatCard label="Avg attendance" value={attAvg != null ? `${attAvg}%` : '—'} icon={<CalendarCheck className="h-5 w-5" />} tone="green" hint="Across all active students" />
         <StatCard label="Avg test score" value={scoreAvg != null ? `${scoreAvg}%` : '—'} icon={<GraduationCap className="h-5 w-5" />} tone="violet" hint="Graded & published tests" />
         <StatCard label="Fees collected" value={inrShort(data.fees.collected)} icon={<IndianRupee className="h-5 w-5" />} tone="amber" hint={`${collectedPct}% of ${inrShort(data.fees.total)} billed`} />
@@ -173,42 +176,123 @@ const COLS: { key: SortKey; label: string; align?: 'right' }[] = [
   { key: 'feeOverdue', label: 'Overdue', align: 'right' },
 ];
 
-function StudentsReport({ rows }: { rows: StudentRow[] }) {
+function StudentsReport() {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'name', dir: 1 });
-
-  const list = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const f = q ? rows.filter((r) => r.name.toLowerCase().includes(q) || r.studentCode.toLowerCase().includes(q) || r.batches.toLowerCase().includes(q)) : rows;
-    return [...f].sort((a, b) => {
-      const x = a[sort.key], y = b[sort.key];
-      if (x == null && y == null) return 0;
-      if (x == null) return 1;
-      if (y == null) return -1;
-      return (typeof x === 'string' ? x.localeCompare(y as string) : (x as number) - (y as number)) * sort.dir;
-    });
-  }, [rows, search, sort]);
+  const [exporting, setExporting] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  // Every matching row, loaded only for printing (the screen table stays paged).
+  const [printRows, setPrintRows] = useState<StudentRow[] | null>(null);
+  const q = useDebounced(search.trim());
+  // Search + sort run on the server; the table shows one page of 20 at a time.
+  const query = { search: q || undefined, sort: sort.key, dir: sort.dir === 1 ? 'asc' : 'desc' };
+  const res = usePagedApi<StudentRow>('/reports/students', query);
+  const list = res.data?.items ?? [];
 
   const toggle = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === 'name' ? 1 : -1 }));
 
-  const exportCsv = () =>
-    downloadCSV(`student-report-${new Date().toISOString().slice(0, 10)}`, list.map((r) => ({
-      'Student Code': r.studentCode, Name: r.name, Batches: r.batches,
-      'Attendance %': r.attendancePct ?? '', Classes: r.classes, 'Avg Score %': r.avgScore ?? '', Tests: r.tests,
-      'Fee Paid': r.feePaid, 'Fee Pending': r.feePending, 'Fee Overdue': r.feeOverdue,
-    })));
+  // CSV = every matching row (same search/sort), fetched from the export endpoint.
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const { data: all } = await api.get<StudentRow[]>('/reports/students/export', { params: query });
+      if (!all.length) return toast.error('Nothing to export');
+      downloadCSV(`student-report-${new Date().toISOString().slice(0, 10)}`, all.map((r) => ({
+        'Student Code': r.studentCode, Name: r.name, Batches: r.batches,
+        'Attendance %': r.attendancePct ?? '', Classes: r.classes, 'Avg Score %': r.avgScore ?? '', Tests: r.tests,
+        'Fee Paid': r.feePaid, 'Fee Pending': r.feePending, 'Fee Overdue': r.feeOverdue,
+      })));
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const printAll = async () => {
+    setPrinting(true);
+    try {
+      const { data: all } = await api.get<StudentRow[]>('/reports/students/export', { params: query });
+      if (!all.length) {
+        setPrinting(false);
+        return toast.error('Nothing to print');
+      }
+      setPrintRows(all);
+    } catch (e) {
+      toast.error(errMsg(e));
+      setPrinting(false);
+    }
+  };
+
+  // Once the full print table has rendered, open the print dialog; drop it again afterwards.
+  useEffect(() => {
+    if (!printRows) return;
+    const done = () => {
+      setPrintRows(null);
+      setPrinting(false);
+    };
+    window.addEventListener('afterprint', done);
+    let fallback: ReturnType<typeof setTimeout> | undefined;
+    const t = setTimeout(() => {
+      window.print();
+      // Desktop print() blocks until the dialog closes; some (mobile) browsers return at once and never
+      // fire afterprint. Either way the button must not stay spinning — and the full table is dropped a
+      // little later if afterprint never came, so the print snapshot still has it.
+      setPrinting(false);
+      fallback = setTimeout(done, 1500);
+    }, 50);
+    return () => {
+      clearTimeout(t);
+      if (fallback) clearTimeout(fallback);
+      window.removeEventListener('afterprint', done);
+    };
+  }, [printRows]);
 
   return (
     <Card pad={false}>
       <div className="no-print flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <SearchInput value={search} onChange={setSearch} placeholder="Search name, code or batch…" className="sm:w-80" />
         <div className="flex gap-2">
-          <Button variant="secondary" icon={<Download className="h-4 w-4" />} onClick={exportCsv} disabled={!list.length}>Export CSV</Button>
-          <Button variant="secondary" icon={<Printer className="h-4 w-4" />} onClick={() => window.print()}>Print / PDF</Button>
+          <Button variant="secondary" icon={<Download className="h-4 w-4" />} loading={exporting} onClick={exportCsv} disabled={!res.data?.total}>Export CSV</Button>
+          <Button variant="secondary" icon={<Printer className="h-4 w-4" />} loading={printing} onClick={printAll} disabled={!res.data?.total}>Print / PDF</Button>
         </div>
       </div>
-      <div className="hidden px-5 pt-4 print:block"><h2 className="text-lg font-bold">Student report</h2></div>
-      {list.length === 0 ? <EmptyState title="No students match" text="Try a different search." /> : (
+      <div className="hidden px-5 pt-4 print:block">
+        <h2 className="text-lg font-bold">Student report</h2>
+        {printRows && <p className="text-xs text-slate-500">{printRows.length} student{printRows.length === 1 ? '' : 's'}{q ? ` matching “${q}”` : ''} · {fmtDate(new Date())}</p>}
+      </div>
+      {printRows && (
+        <div className="hidden print:block">
+          <table className="table">
+            <thead>
+              <tr>{COLS.map((c) => <th key={c.key} className={clsx(c.align === 'right' && '!text-right')}>{c.label}</th>)}</tr>
+            </thead>
+            <tbody>
+              {printRows.map((r) => (
+                <tr key={r._id} className="break-inside-avoid">
+                  <td>
+                    <p className="font-semibold text-slate-800">{r.name}</p>
+                    <p className="text-xs text-slate-500">{r.studentCode} · {r.batches || 'No batch'}</p>
+                  </td>
+                  <td className="text-right">{r.attendancePct != null ? `${r.attendancePct}%` : '—'}</td>
+                  <td className="text-right">{r.classes}</td>
+                  <td className="text-right">{r.avgScore != null ? `${r.avgScore}%` : '—'}</td>
+                  <td className="text-right">{r.tests}</td>
+                  <td className="text-right">{inr(r.feePaid)}</td>
+                  <td className="text-right">{inr(r.feePending)}</td>
+                  <td className="text-right">{r.feeOverdue ? inr(r.feeOverdue) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className={clsx(printRows && 'print:hidden')}>
+      {res.loading && !res.data ? (
+        <div className="space-y-2 p-5">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
+      ) : res.error ? (
+        <div className="p-5"><ErrorState message={res.error} onRetry={res.reload} /></div>
+      ) : list.length === 0 ? <EmptyState title="No students match" text="Try a different search." /> : (
         <div className="table-wrap scrollbar-thin">
           <table className="table">
             <thead>
@@ -248,7 +332,8 @@ function StudentsReport({ rows }: { rows: StudentRow[] }) {
           </table>
         </div>
       )}
-      <div className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">Showing {list.length} of {rows.length} students</div>
+      {res.pager && <Pager {...res.pager} noun="students" className="no-print" />}
+      </div>
     </Card>
   );
 }
@@ -257,18 +342,19 @@ function StudentsReport({ rows }: { rows: StudentRow[] }) {
 
 function AttendanceReport({ daily }: { daily: BasicReport['attendanceDaily'] }) {
   const [mode, setMode] = useState<'area' | 'bar'>('area');
-  const data = daily.map((d) => ({ ...d, absent: d.total - d.present, label: fmtDateShort(d.date) }));
+  const data = daily.map((d) => ({ ...d, absent: d.total - d.present, label: fmtDateShort(parseYmd(d.date)) }));
   const withData = daily.filter((d) => d.pct != null);
   const overall = withData.reduce((a, d) => a + d.total, 0) ? Math.round((withData.reduce((a, d) => a + d.present, 0) / withData.reduce((a, d) => a + d.total, 0)) * 100) : null;
   const best = [...withData].sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0))[0];
   const worst = [...withData].sort((a, b) => (a.pct ?? 0) - (b.pct ?? 0))[0];
+  const days = useClientPage([...daily].reverse(), daily.length);
 
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="30-day attendance" value={overall != null ? `${overall}%` : '—'} icon={<CalendarCheck className="h-5 w-5" />} tone="green" hint={`${withData.length} class days recorded`} />
-        <StatCard label="Best day" value={best ? `${best.pct}%` : '—'} icon={<ArrowUp className="h-5 w-5" />} tone="sky" hint={best ? fmtDate(best.date) : undefined} />
-        <StatCard label="Lowest day" value={worst ? `${worst.pct}%` : '—'} icon={<ArrowDown className="h-5 w-5" />} tone="rose" hint={worst ? fmtDate(worst.date) : undefined} />
+        <StatCard label="Best day" value={best ? `${best.pct}%` : '—'} icon={<ArrowUp className="h-5 w-5" />} tone="sky" hint={best ? fmtDate(parseYmd(best.date)) : undefined} />
+        <StatCard label="Lowest day" value={worst ? `${worst.pct}%` : '—'} icon={<ArrowDown className="h-5 w-5" />} tone="rose" hint={worst ? fmtDate(parseYmd(worst.date)) : undefined} />
       </div>
       <Card>
         <CardHeader title="Daily attendance" subtitle="Last 30 days" icon={<BarChart3 className="h-4 w-4" />}
@@ -308,9 +394,9 @@ function AttendanceReport({ daily }: { daily: BasicReport['attendanceDaily'] }) 
           <table className="table">
             <thead><tr><th>Date</th><th className="!text-right">Present</th><th className="!text-right">Absent</th><th className="!text-right">Marked</th><th>Attendance</th></tr></thead>
             <tbody>
-              {[...daily].reverse().map((d) => (
+              {days.items.map((d) => (
                 <tr key={d.date}>
-                  <td className="font-medium text-slate-700">{fmtDate(d.date, { weekday: 'short', day: 'numeric', month: 'short' })}</td>
+                  <td className="font-medium text-slate-700">{fmtDate(parseYmd(d.date), { weekday: 'short', day: 'numeric', month: 'short' })}</td>
                   <td className="text-right text-emerald-600">{d.total ? d.present : '—'}</td>
                   <td className="text-right text-rose-600">{d.total ? d.total - d.present : '—'}</td>
                   <td className="text-right text-slate-600">{d.total || '—'}</td>
@@ -324,6 +410,7 @@ function AttendanceReport({ daily }: { daily: BasicReport['attendanceDaily'] }) 
             </tbody>
           </table>
         </div>
+        <Pager {...days.pager} noun="days" />
       </Card>
     </div>
   );
@@ -331,14 +418,13 @@ function AttendanceReport({ daily }: { daily: BasicReport['attendanceDaily'] }) 
 
 /* ------------------------------------------------------------------ */
 
-function FeeReport({ fees, rows }: { fees: BasicReport['fees']; rows: StudentRow[] }) {
+function FeeReport({ fees, defaulters, overdueStudents }: { fees: BasicReport['fees']; defaulters: StudentRow[]; overdueStudents: number }) {
   const notOverdue = Math.max(0, fees.pending - fees.overdue);
   const pie = [
     { name: 'Collected', value: fees.collected, color: '#10b981' },
     { name: 'Pending (not due)', value: notOverdue, color: '#f59e0b' },
     { name: 'Overdue', value: fees.overdue, color: '#ec4899' },
   ].filter((x) => x.value > 0);
-  const defaulters = rows.filter((r) => r.feeOverdue > 0).sort((a, b) => b.feeOverdue - a.feeOverdue).slice(0, 8);
   const collectedPct = fees.total ? Math.round((fees.collected / fees.total) * 100) : 0;
 
   return (
@@ -346,7 +432,7 @@ function FeeReport({ fees, rows }: { fees: BasicReport['fees']; rows: StudentRow
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Collected" value={inrShort(fees.collected)} icon={<Wallet className="h-5 w-5" />} tone="green" hint={`${collectedPct}% of ${inr(fees.total)}`} />
         <StatCard label="Pending" value={inrShort(fees.pending)} icon={<IndianRupee className="h-5 w-5" />} tone="amber" hint={inr(fees.pending)} />
-        <StatCard label="Overdue" value={inrShort(fees.overdue)} icon={<AlertCircle className="h-5 w-5" />} tone="rose" hint={`${rows.filter((r) => r.feeOverdue > 0).length} students`} />
+        <StatCard label="Overdue" value={inrShort(fees.overdue)} icon={<AlertCircle className="h-5 w-5" />} tone="rose" hint={`${overdueStudents} students`} />
         <StatCard label="This month" value={inrShort(fees.thisMonth)} icon={<CalendarDays className="h-5 w-5" />} tone="sky" hint={inr(fees.thisMonth)} />
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
@@ -403,6 +489,7 @@ function FeeReport({ fees, rows }: { fees: BasicReport['fees']; rows: StudentRow
 
 function AdvancedReports() {
   const { data, loading, error, reload } = useApi<AdvancedReport>('/reports/advanced');
+  const batches = useClientPage(data?.batches);
   if (loading && !data) return <PageLoader />;
   if (error || !data) return <ErrorState message={error ?? 'Could not load advanced reports'} onRetry={reload} />;
 
@@ -471,7 +558,7 @@ function AdvancedReports() {
             <table className="table">
               <thead><tr><th>Batch</th><th className="!text-right">Students</th><th>Attendance</th><th className="!text-right">Avg score</th><th className="!text-right">Tests</th><th>Teacher</th></tr></thead>
               <tbody>
-                {data.batches.map((b, i) => (
+                {batches.items.map((b, j) => { const i = batches.offset + j; return (
                   <tr key={b._id}>
                     <td>
                       <div className="flex items-center gap-2">
@@ -490,10 +577,11 @@ function AdvancedReports() {
                     <td className="text-right">{b.tests}</td>
                     <td className="text-slate-600">{b.teacher}</td>
                   </tr>
-                ))}
+                ); })}
               </tbody>
             </table>
           </div>
+          <Pager {...batches.pager} noun="batches" />
         </Card>
         <Card>
           <CardHeader title="Subject-wise average" icon={<GraduationCap className="h-4 w-4" />} />

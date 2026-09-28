@@ -2,12 +2,21 @@ import { BookOpen, Check, Copy, GraduationCap, KeyRound, Mail, MoreVertical, Pen
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 import { Avatar, Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Input, Modal, PageHeader, SearchInput, Skeleton, Tabs, clsx } from '../../components/ui';
-import { useApi } from '../../hooks/useApi';
+import { useDebounced, usePagedApi } from '../../hooks/useApi';
+import { Pager } from '../../components/Pager';
 import { api, errMsg, isUpgradeError } from '../../lib/api';
 import { fmtDate, inr, ymd } from '../../lib/format';
-import type { Teacher } from '../../lib/types';
+import type { Teacher as BaseTeacher } from '../../lib/types';
 
-type Creds = { email: string; password: string; title: string };
+/** Teacher list item: each batch says whether they lead it or co-teach it. */
+type Teacher = Omit<BaseTeacher, 'batches'> & { batches: { _id: string; name: string; color?: string; role?: 'lead' | 'co' }[] };
+type UpdateResp = BaseTeacher & { unassignedBatches?: string[] };
+
+const toastUnassigned = (names?: string[]) => {
+  if (names?.length) toast(`Removed from: ${names.join(', ')} – assign a new teacher`, { icon: '⚠️', duration: 7000 });
+};
+
+type Creds = { email: string; password: string; title: string; reset?: boolean };
 
 function CopyRow({ label, value }: { label: string; value: string }) {
   const [done, setDone] = useState(false);
@@ -42,7 +51,7 @@ function TeacherModal({ open, onClose, teacher, onSaved }: { open: boolean; onCl
     setF({
       name: teacher?.name ?? '', email: teacher?.email ?? '', phone: teacher?.phone ?? '', subjects: teacher?.subjects?.join(', ') ?? '',
       qualification: teacher?.qualification ?? '', salary: teacher?.salary != null ? String(teacher.salary) : '',
-      joiningDate: teacher?.joiningDate ? ymd(new Date(teacher.joiningDate)) : ymd(), password: '',
+      joiningDate: teacher ? (teacher.joiningDate ? ymd(new Date(teacher.joiningDate)) : '') : ymd(), password: '',
     });
   }, [open, teacher]);
   const set = (k: string) => (e: { target: { value: string } }) => setF((p) => ({ ...p, [k]: e.target.value }));
@@ -50,23 +59,27 @@ function TeacherModal({ open, onClose, teacher, onSaved }: { open: boolean; onCl
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!f.name.trim()) return toast.error('Name is required');
-    if (!editing && !f.email.trim()) return toast.error('Email is required');
+    if (!f.email.trim()) return toast.error('Email is required');
+    if (!editing && f.password && f.password.length < 8) return toast.error('Password must be at least 8 characters');
     setSaving(true);
     const body: Record<string, unknown> = {
       name: f.name.trim(), phone: f.phone, qualification: f.qualification, joiningDate: f.joiningDate,
       subjects: f.subjects.split(',').map((x) => x.trim()).filter(Boolean),
-      ...(f.salary !== '' && { salary: Number(f.salary) }),
+      // When editing, an emptied salary is sent as '' so the server clears it.
+      ...(f.salary !== '' ? { salary: Number(f.salary) } : editing ? { salary: '' } : {}),
     };
     try {
       if (editing) {
-        await api.put(`/teachers/${teacher!._id}`, body);
-        toast.success('Teacher updated');
+        const email = f.email.trim().toLowerCase();
+        const { data } = await api.put<UpdateResp>(`/teachers/${teacher!._id}`, { ...body, ...(email !== teacher!.email && { email }) });
+        toast.success(email !== teacher!.email ? 'Teacher updated — they now sign in with the new email' : 'Teacher updated');
+        toastUnassigned(data?.unassignedBatches);
         onSaved();
       } else {
-        const { data } = await api.post<{ teacher: Teacher; credentials: { email: string; password: string } }>('/teachers', {
+        const { data } = await api.post<{ teacher: Teacher; credentials: { email: string; password: string }; reactivated?: boolean }>('/teachers', {
           ...body, email: f.email.trim(), ...(f.password && { password: f.password }),
         });
-        toast.success(`${data.teacher.name} added`);
+        toast.success(data.reactivated ? `${data.teacher.name} was on your staff before — their account is active again` : `${data.teacher.name} added`);
         onSaved({ ...data.credentials, title: `Login for ${data.teacher.name}` });
       }
       onClose();
@@ -83,13 +96,14 @@ function TeacherModal({ open, onClose, teacher, onSaved }: { open: boolean; onCl
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" form="teacher-form" loading={saving}>{editing ? 'Save changes' : 'Add teacher'}</Button></>}>
       <form id="teacher-form" onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
         <Input label="Full name *" value={f.name ?? ''} onChange={set('name')} placeholder="e.g. Neha Kapoor" autoFocus className="sm:col-span-2" />
-        {!editing && <Input label="Email (login) *" type="email" value={f.email ?? ''} onChange={set('email')} placeholder="teacher@example.com" />}
-        <Input label="Phone" value={f.phone ?? ''} onChange={set('phone')} inputMode="tel" className={editing ? 'sm:col-span-2' : ''} />
+        <Input label="Email (login) *" type="email" value={f.email ?? ''} onChange={set('email')} placeholder="teacher@example.com"
+          hint={editing ? 'Changing this changes the email they sign in with.' : undefined} />
+        <Input label="Phone" value={f.phone ?? ''} onChange={set('phone')} inputMode="tel" />
         <Input label="Subjects" value={f.subjects ?? ''} onChange={set('subjects')} placeholder="Physics, Chemistry" hint="Comma separated" className="sm:col-span-2" />
         <Input label="Qualification" value={f.qualification ?? ''} onChange={set('qualification')} placeholder="e.g. M.Sc Physics" />
         <Input label="Monthly salary (₹)" type="number" min={0} value={f.salary ?? ''} onChange={set('salary')} />
         <Input label="Joining date" type="date" value={f.joiningDate ?? ''} onChange={set('joiningDate')} />
-        {!editing && <Input label="Password (optional)" value={f.password ?? ''} onChange={set('password')} placeholder="Auto-generated if blank" />}
+        {!editing && <Input label="Password (optional)" value={f.password ?? ''} onChange={set('password')} placeholder="Auto-generated if blank" minLength={8} hint="At least 8 characters" />}
       </form>
     </Modal>
   );
@@ -129,20 +143,25 @@ function ActionsMenu({ t, onEdit, onReset, onToggle }: { t: Teacher; onEdit: () 
 type Filter = 'active' | 'inactive' | 'all';
 
 export default function Teachers() {
-  const { data, loading, error, reload } = useApi<Teacher[]>('/teachers');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('active');
+  const q = useDebounced(search.trim(), 300);
+  // Search and the Active / Inactive / All tabs both run on the server — 20 teachers per page.
+  const { data, loading, error, reload, pager } = usePagedApi<Teacher, { counts: { all: number; active: number; inactive: number } }>('/teachers', {
+    search: q || undefined,
+    status: filter,
+  });
   const [editing, setEditing] = useState<Teacher | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [creds, setCreds] = useState<Creds | null>(null);
   const [confirm, setConfirm] = useState<{ t: Teacher; kind: 'deactivate' | 'reset' } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const all = data ?? [];
-  const q = search.trim().toLowerCase();
-  const list = all.filter((t) => (filter === 'all' || (filter === 'active') === t.active) &&
-    (!q || [t.name, t.email, t.phone, ...(t.subjects ?? [])].some((x) => x?.toLowerCase().includes(q))));
-  const activeCount = all.filter((t) => t.active).length;
+  const all = data?.items ?? [];
+  const list = all;
+  const counts = data?.counts;
+  const activeCount = counts?.active ?? 0;
+  const refresh = () => reload();
 
   const openForm = (t: Teacher | null) => { setEditing(t); setFormOpen(true); };
 
@@ -150,9 +169,11 @@ export default function Teachers() {
     try {
       await api.put(`/teachers/${t._id}`, { active: true });
       toast.success(`${t.name} reactivated`);
-      reload();
+      refresh();
     } catch (e) {
-      toast.error(errMsg(e));
+      // 402 = no free teacher seats on the current plan; the server message explains it.
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      toast.error(errMsg(e, status === 402 ? 'Your plan has no free teacher seats. Upgrade or deactivate another teacher first.' : undefined), { duration: status === 402 ? 7000 : 4000 });
     }
   };
 
@@ -161,12 +182,13 @@ export default function Teachers() {
     setBusy(true);
     try {
       if (confirm.kind === 'deactivate') {
-        await api.delete(`/teachers/${confirm.t._id}`);
+        const { data: r } = await api.delete<{ ok: boolean; unassignedBatches?: string[] }>(`/teachers/${confirm.t._id}`);
         toast.success(`${confirm.t.name} deactivated`);
-        reload();
+        toastUnassigned(r?.unassignedBatches);
+        refresh();
       } else {
         const { data: c } = await api.post<{ email: string; password: string }>(`/teachers/${confirm.t._id}/reset-password`);
-        setCreds({ ...c, title: `New password for ${confirm.t.name}` });
+        setCreds({ ...c, title: `New password for ${confirm.t.name}`, reset: true });
         toast.success('Password reset');
       }
       setConfirm(null);
@@ -179,15 +201,15 @@ export default function Teachers() {
 
   return (
     <div>
-      <PageHeader title="Teachers" subtitle={data ? `${activeCount} active teacher${activeCount === 1 ? '' : 's'} on your team` : 'Your teaching team'}
+      <PageHeader title="Teachers" subtitle={counts ? `${activeCount} active teacher${activeCount === 1 ? '' : 's'} on your team` : 'Your teaching team'}
         actions={<Button icon={<Plus className="h-4 w-4" />} onClick={() => openForm(null)}>Add teacher</Button>} />
 
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center">
         <SearchInput value={search} onChange={setSearch} placeholder="Search by name, subject, email…" className="flex-1" />
         <Tabs<Filter> value={filter} onChange={setFilter} tabs={[
-          { value: 'active', label: 'Active', count: activeCount },
-          { value: 'inactive', label: 'Inactive', count: all.length - activeCount },
-          { value: 'all', label: 'All', count: all.length },
+          { value: 'active', label: 'Active', count: counts?.active },
+          { value: 'inactive', label: 'Inactive', count: counts?.inactive },
+          { value: 'all', label: 'All', count: counts?.all },
         ]} />
       </div>
 
@@ -195,9 +217,9 @@ export default function Teachers() {
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-60" />)}</div>
       ) : list.length === 0 ? (
         <Card>
-          <EmptyState icon={<GraduationCap className="h-7 w-7" />} title={all.length ? 'No teachers match' : 'No teachers yet'}
-            text={all.length ? 'Try a different search or filter.' : 'Add your teachers so they can mark attendance and enter test marks.'}
-            action={!all.length && <Button icon={<Plus className="h-4 w-4" />} onClick={() => openForm(null)}>Add teacher</Button>} />
+          <EmptyState icon={<GraduationCap className="h-7 w-7" />} title={counts?.all ? 'No teachers match' : 'No teachers yet'}
+            text={counts?.all ? 'Try a different search or filter.' : 'Add your teachers so they can mark attendance and enter test marks.'}
+            action={!counts?.all && <Button icon={<Plus className="h-4 w-4" />} onClick={() => openForm(null)}>Add teacher</Button>} />
         </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -233,8 +255,10 @@ export default function Teachers() {
                   <div className="flex flex-wrap gap-1.5">
                     {t.batches.map((b) => (
                       <span key={b._id} className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                        title={b.role === 'co' ? 'Co-teacher' : 'Lead teacher'}
                         style={{ background: `${b.color ?? '#6366f1'}15`, color: b.color ?? '#6366f1' }}>
                         <span className="h-1.5 w-1.5 rounded-full" style={{ background: b.color ?? '#6366f1' }} />{b.name}
+                        <span className="rounded bg-white/70 px-1 text-[9px] font-bold uppercase tracking-wide">{b.role === 'co' ? 'Co' : 'Lead'}</span>
                       </span>
                     ))}
                   </div>
@@ -250,15 +274,16 @@ export default function Teachers() {
           ))}
         </div>
       )}
+      {pager && <Card pad={false} className="mt-4 overflow-hidden"><Pager {...pager} noun="teachers" /></Card>}
 
-      <TeacherModal open={formOpen} onClose={() => setFormOpen(false)} teacher={editing} onSaved={(c) => { reload(); if (c) setCreds(c); }} />
+      <TeacherModal open={formOpen} onClose={() => setFormOpen(false)} teacher={editing} onSaved={(c) => { refresh(); if (c) setCreds(c); }} />
 
       <ConfirmDialog open={!!confirm} onClose={() => setConfirm(null)} onConfirm={runConfirm} loading={busy} danger={confirm?.kind === 'deactivate'}
         title={confirm?.kind === 'deactivate' ? `Deactivate ${confirm.t.name}?` : `Reset password for ${confirm?.t.name ?? ''}?`}
         confirmLabel={confirm?.kind === 'deactivate' ? 'Deactivate' : 'Reset password'}
         text={confirm?.kind === 'deactivate'
-          ? 'They will no longer be able to log in, and will be unassigned from their batches. You can reactivate them later.'
-          : 'A new password will be generated. Their current password will stop working immediately.'} />
+          ? 'They will be signed out and can no longer log in. They are also removed from all their batches (as lead or co-teacher), so you will need to assign new teachers there. Their past attendance and marks stay. You can reactivate them later.'
+          : 'A new 12-character password will be generated. Their current password stops working immediately and they are signed out on every device.'} />
 
       <Modal open={!!creds} onClose={() => setCreds(null)} title={creds?.title ?? ''} subtitle="Share these with the teacher so they can log in."
         footer={<Button onClick={() => setCreds(null)}>Done</Button>}>
@@ -267,6 +292,7 @@ export default function Teachers() {
             <CopyRow label="Email" value={creds.email} />
             <CopyRow label="Password" value={creds.password} />
             <CopyRow label="Share message" value={`Your CoachFlow login — ${location.origin}/login · Email: ${creds.email} · Password: ${creds.password}`} />
+            {creds.reset && <p className="text-xs text-slate-500">The old password no longer works, and the teacher has been signed out on all devices.</p>}
             <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">This password is shown only once. Ask the teacher to keep it safe.</p>
           </div>
         )}

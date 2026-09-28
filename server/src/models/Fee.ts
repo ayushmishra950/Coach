@@ -16,6 +16,8 @@ const invoiceSchema = new Schema(
   },
   { timestamps: true },
 );
+invoiceSchema.index({ instituteId: 1, status: 1, dueDate: 1 });
+invoiceSchema.index({ instituteId: 1, studentId: 1, dueDate: 1 });
 
 export type InvoiceT = InferSchemaType<typeof invoiceSchema>;
 export const Invoice = model('Invoice', invoiceSchema);
@@ -32,9 +34,19 @@ const paymentSchema = new Schema(
     note: String,
     paidAt: { type: Date, default: Date.now },
     collectedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    /** Invoice balance right after this payment — printed on the receipt, never recomputed. */
+    balanceAfter: Number,
+    /** A cancelled (voided) receipt stays for the record but no longer counts as money received. */
+    status: { type: String, enum: ['valid', 'void'], default: 'valid' },
+    voidedAt: Date,
+    voidReason: String,
+    voidedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true },
 );
+paymentSchema.index({ instituteId: 1, paidAt: -1, _id: -1 });
+paymentSchema.index({ instituteId: 1, studentId: 1, paidAt: -1 });
+paymentSchema.index({ instituteId: 1, receiptNo: 1 }, { unique: true });
 
 export type PaymentT = InferSchemaType<typeof paymentSchema>;
 export const Payment = model('Payment', paymentSchema);

@@ -1,18 +1,26 @@
 import { ArrowLeft, BookOpen, CalendarCheck, CalendarClock, ClipboardCheck, Clock, DoorOpen, FilePlus2, Mail, Phone, TrendingUp, Trophy, User, Users } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Avatar, Button, Card, CardHeader, ChartTooltip, EmptyState, ErrorState, PageLoader, Progress, SearchInput, StatCard, StatusBadge, clsx } from '../../components/ui';
-import { useApi } from '../../hooks/useApi';
+import { useApi, useDebounced } from '../../hooks/useApi';
+import { Pager } from '../../components/Pager';
+import type { Paged } from '../../lib/types';
 import { DAYS, fmtDate, fmtDateShort, fmtDateTime, fmtTime, pctTone } from '../../lib/format';
 
 interface BatchDetailData {
   batch: {
     _id: string; name: string; course?: string; subject?: string; days: string[]; startTime: string; endTime: string; room?: string; capacity?: number;
     color: string; active: boolean; teacher?: { _id: string; name: string; email?: string; phone?: string; subjects?: string[] } | null;
+    /** Other subject teachers of the batch. */
+    coTeachers?: { _id: string; name: string; subjects?: string[] }[];
   };
-  students: { _id: string; name: string; studentCode: string; phone?: string; parentName?: string; parentPhone?: string; attendancePct: number | null; avgScore: number | null }[];
-  tests: { _id: string; subject: string; topic?: string; date: string; status: string; maxMarks: number; avg: number | null }[];
+  /** Active students in the batch, regardless of the search box. */
+  studentsTotal: number;
+  /** Paged server-side via ?studentsPage= (20 per page). */
+  students: Paged<{ _id: string; name: string; studentCode: string; phone?: string; parentName?: string; parentPhone?: string; attendancePct: number | null; avgScore: number | null }>;
+  /** Paged server-side via ?testsPage= (20 per page, newest first). */
+  tests: Paged<{ _id: string; subject: string; topic?: string; date: string; status: string; maxMarks: number; avg: number | null }>;
   attendanceTrend: { date: string; pct: number }[];
   nextClassAt: string | null;
 }
@@ -25,13 +33,31 @@ const avgOf = (xs: (number | null | undefined)[]) => {
 export default function BatchDetail() {
   const { id } = useParams();
   const nav = useNavigate();
-  const { data, loading, error, reload } = useApi<BatchDetailData>(`/batches/${id}`);
   const [q, setQ] = useState('');
+  const dq = useDebounced(q.trim(), 300);
+  // Page numbers belong to one batch (and, for students, one search) — a new batch or search starts on page 1.
+  const sKey = `${id}|${dq}`;
+  const [sp, setSp] = useState({ k: sKey, p: 1 });
+  if (sp.k !== sKey) setSp({ k: sKey, p: 1 });
+  const studentsPage = sp.k === sKey ? sp.p : 1;
+  const setStudentsPage = (p: number) => setSp({ k: sKey, p });
+  const [tp, setTp] = useState({ k: id, p: 1 });
+  if (tp.k !== id) setTp({ k: id, p: 1 });
+  const testsPage = tp.k === id ? tp.p : 1;
+  const setTestsPage = (p: number) => setTp({ k: id, p });
+  // Student search runs on the server so it covers the whole batch, not just this page.
+  const { data, loading, error, reload } = useApi<BatchDetailData>(`/batches/${id}`, { studentsPage, testsPage, search: dq || undefined });
 
   if (loading && !data) return <PageLoader />;
   if (error || !data) return <ErrorState message={error ?? 'Batch not found'} onRetry={reload} />;
 
-  const { batch: b, students, tests, attendanceTrend } = data;
+  const { batch: b, attendanceTrend } = data;
+  const studentPage = data.students;
+  const testPage = data.tests;
+  const students = studentPage.items;
+  const tests = testPage.items;
+  // Graded / upcoming split is only exact when every test is on this page.
+  const allTestsHere = testPage.pages <= 1;
   const color = b.color || '#6366f1';
   const orderedDays = DAYS.filter((d) => b.days.includes(d));
   const schedule = `${orderedDays.join('/') || '—'} · ${fmtTime(b.startTime)} – ${fmtTime(b.endTime)}`;
@@ -40,7 +66,7 @@ export default function BatchDetail() {
   const graded = tests.filter((t) => t.status !== 'scheduled').length;
   const upcoming = tests.filter((t) => t.status === 'scheduled').length;
   const trend = attendanceTrend.map((x) => ({ ...x, label: fmtDateShort(x.date) }));
-  const filtered = students.filter((s) => !q || s.name.toLowerCase().includes(q.toLowerCase()) || s.studentCode.toLowerCase().includes(q.toLowerCase()));
+  const filtered = students;
   const gradId = `att-${b._id}`;
 
   return (
@@ -63,6 +89,9 @@ export default function BatchDetail() {
             {(b.course || b.subject) && <p className="mt-1 text-sm text-slate-500">{[b.course, b.subject].filter(Boolean).join(' · ')}</p>}
             <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-slate-600">
               <span className="flex items-center gap-1.5"><User className="h-4 w-4 text-slate-400" />{b.teacher?.name ?? <span className="text-amber-600">No teacher</span>}</span>
+              {!!b.coTeachers?.length && (
+                <span className="flex items-center gap-1.5"><Users className="h-4 w-4 text-slate-400" />Also: {b.coTeachers.map((t) => t.name).join(', ')}</span>
+              )}
               <span className="flex items-center gap-1.5"><Clock className="h-4 w-4 text-slate-400" />{schedule}</span>
               {b.room && <span className="flex items-center gap-1.5"><DoorOpen className="h-4 w-4 text-slate-400" />{b.room}</span>}
               {data.nextClassAt && (
@@ -79,13 +108,13 @@ export default function BatchDetail() {
 
       {/* KPIs */}
       <div className="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <StatCard label="Students" value={<>{students.length}{b.capacity ? <span className="text-base font-semibold text-slate-400"> / {b.capacity}</span> : null}</>}
-          icon={<Users className="h-5 w-5" />} tone="brand" hint={b.capacity ? <Progress value={(students.length / b.capacity) * 100} tone="brand" /> : 'Active students'} />
+        <StatCard label="Students" value={<>{data.studentsTotal}{b.capacity ? <span className="text-base font-semibold text-slate-400"> / {b.capacity}</span> : null}</>}
+          icon={<Users className="h-5 w-5" />} tone="brand" hint={b.capacity ? <Progress value={(data.studentsTotal / b.capacity) * 100} tone="brand" /> : 'Active students'} />
         <StatCard label="Avg attendance" value={<span className={pctTone(avgAtt)}>{avgAtt != null ? `${avgAtt}%` : '—'}</span>}
           icon={<CalendarCheck className="h-5 w-5" />} tone="green" hint={`Last ${attendanceTrend.length} sessions`} />
         <StatCard label="Avg score" value={<span className={pctTone(avgScore)}>{avgScore != null ? `${avgScore}%` : '—'}</span>}
-          icon={<Trophy className="h-5 w-5" />} tone="amber" hint="Across graded tests" />
-        <StatCard label="Tests" value={tests.length} icon={<BookOpen className="h-5 w-5" />} tone="violet" hint={`${graded} graded · ${upcoming} upcoming`} />
+          icon={<Trophy className="h-5 w-5" />} tone="amber" hint={allTestsHere ? 'Across graded tests' : 'Across the latest tests shown'} />
+        <StatCard label="Tests" value={testPage.total} icon={<BookOpen className="h-5 w-5" />} tone="violet" hint={allTestsHere ? `${graded} graded · ${upcoming} upcoming` : 'Newest first'} />
       </div>
 
       <div className="mb-6 grid gap-6 lg:grid-cols-5">
@@ -114,7 +143,7 @@ export default function BatchDetail() {
         </Card>
 
         <Card className="lg:col-span-2">
-          <CardHeader title="Tests" subtitle={`${tests.length} total`} icon={<BookOpen className="h-5 w-5" />}
+          <CardHeader title="Tests" subtitle={`${testPage.total} total`} icon={<BookOpen className="h-5 w-5" />}
             action={<Link to={`/app/tests?batchId=${b._id}&new=1`} className="text-sm font-semibold text-brand-700 hover:underline">+ New</Link>} />
           {tests.length === 0 ? <p className="py-8 text-center text-sm text-slate-400">No tests yet</p> : (
             <div className="-mx-2 max-h-72 space-y-1 overflow-y-auto px-2 scrollbar-thin">
@@ -135,6 +164,7 @@ export default function BatchDetail() {
               ))}
             </div>
           )}
+          <Pager page={testPage.page} pages={testPage.pages} total={testPage.total} limit={testPage.limit} onChange={setTestsPage} loading={loading} noun="tests" className="-mx-5 mt-3 -mb-5 sm:-mx-6 sm:-mb-6" />
         </Card>
       </div>
 
@@ -142,18 +172,20 @@ export default function BatchDetail() {
         <div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h3 className="font-bold text-slate-900">Students</h3>
-            <p className="text-sm text-slate-500">{students.length} active in this batch</p>
+            <p className="text-sm text-slate-500">{data.studentsTotal} active in this batch{dq ? ` · ${studentPage.total} match` : ''}</p>
           </div>
-          {students.length > 6 && <SearchInput value={q} onChange={setQ} placeholder="Search students…" className="sm:w-64" />}
+          {(data.studentsTotal > 6 || !!q) && <SearchInput value={q} onChange={setQ} placeholder="Search students…" className="sm:w-64" />}
         </div>
-        {students.length === 0 ? <EmptyState icon={<Users className="h-7 w-7" />} title="No students in this batch" text="Add students by editing the batch or a student's profile." /> : (
+        {students.length === 0 ? <EmptyState icon={<Users className="h-7 w-7" />} title={dq ? 'No students match your search' : 'No students in this batch'} text={dq ? 'Try a different name, code or phone number.' : "Add students by editing the batch or a student's profile."} /> : (
           <>
             <div className="table-wrap hidden md:block">
               <table className="table">
                 <thead><tr><th>Student</th><th>Parent</th><th>Attendance</th><th>Avg score</th></tr></thead>
                 <tbody>
                   {filtered.map((s) => (
-                    <tr key={s._id} className="cursor-pointer" onClick={() => nav(`/app/students/${s._id}`)}>
+                    <tr key={s._id} className="cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-400" tabIndex={0} role="link"
+                      onClick={() => nav(`/app/students/${s._id}`)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nav(`/app/students/${s._id}`); } }}>
                       <td>
                         <div className="flex items-center gap-3">
                           <Avatar name={s.name} size="sm" />
@@ -189,6 +221,7 @@ export default function BatchDetail() {
             </div>
           </>
         )}
+        <Pager page={studentPage.page} pages={studentPage.pages} total={studentPage.total} limit={studentPage.limit} onChange={setStudentsPage} loading={loading} noun="students" />
       </Card>
 
       {b.teacher && (b.teacher.email || b.teacher.phone) && (
@@ -196,8 +229,13 @@ export default function BatchDetail() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <Avatar name={b.teacher.name} />
             <div className="flex-1">
-              <p className="font-bold text-slate-900">{b.teacher.name}</p>
+              <p className="font-bold text-slate-900">{b.teacher.name} <span className="text-xs font-semibold text-slate-400">· Lead teacher</span></p>
               <p className="text-sm text-slate-500">{b.teacher.subjects?.join(', ') || 'Teacher'}</p>
+              {!!b.coTeachers?.length && (
+                <p className="mt-1 text-xs text-slate-500">
+                  Other teachers: {b.coTeachers.map((t) => `${t.name}${t.subjects?.length ? ` (${t.subjects.join(', ')})` : ''}`).join(', ')}
+                </p>
+              )}
             </div>
             <div className="flex flex-wrap gap-4 text-sm text-slate-600">
               {b.teacher.phone && <a href={`tel:${b.teacher.phone}`} className="flex items-center gap-1.5 hover:text-brand-700"><Phone className="h-4 w-4 text-slate-400" />{b.teacher.phone}</a>}

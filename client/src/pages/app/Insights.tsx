@@ -1,18 +1,20 @@
 import {
   AlertTriangle, BookOpen, Check, Copy, FileText, Lock, RefreshCw, Sparkles, TrendingDown, TrendingUp, UserCheck, Users,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { PremiumCard } from '../../components/Upgrade';
 import {
-  Avatar, Badge, Button, Card, CardHeader, EmptyState, ErrorState, PageHeader, PageLoader, Progress, Select, Spinner, clsx,
+  Avatar, Badge, Button, Card, CardHeader, EmptyState, ErrorState, PageHeader, PageLoader, Progress, SearchInput, Spinner, clsx,
 } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
-import { useApi } from '../../hooks/useApi';
+import { useApi, useClientPage, useDebounced } from '../../hooks/useApi';
+import { Pager } from '../../components/Pager';
 import { api, errMsg } from '../../lib/api';
 import { fmtDateTime, pctTone } from '../../lib/format';
-import type { Student } from '../../lib/types';
+
+interface StudentOption { _id: string; name: string; studentCode: string; status: string }
 
 interface InsightsData {
   generatedAt: string;
@@ -99,6 +101,7 @@ function riskTone(r: number) {
 
 function InsightsView() {
   const { data, loading, error, reload } = useApi<InsightsData>('/insights');
+  const batchPage = useClientPage(data?.teacherInsights); // one row per batch — 20 at a time
   if (loading && !data) return <PageLoader />;
   if (error || !data) return <ErrorState message={error ?? 'Could not load insights'} onRetry={reload} />;
 
@@ -212,7 +215,7 @@ function InsightsView() {
             <table className="table">
               <thead><tr><th>Batch</th><th>Teacher</th><th className="!text-right">Students</th><th>Avg attendance</th><th>Avg score</th><th>Signal</th></tr></thead>
               <tbody>
-                {data.teacherInsights.map((t) => {
+                {batchPage.items.map((t) => {
                   const signal = t.attendance != null && t.attendance < 75 ? { tone: 'red' as const, l: 'Low attendance' }
                     : t.score != null && t.score < 55 ? { tone: 'amber' as const, l: 'Scores need work' }
                     : t.score != null && t.score >= 75 && (t.attendance ?? 0) >= 85 ? { tone: 'green' as const, l: 'Performing well' }
@@ -231,13 +234,14 @@ function InsightsView() {
               </tbody>
             </table>
           </div>
+          <Pager {...batchPage.pager} noun="batches" />
         </Card>
       </div>
 
       <ParentReportGenerator />
 
       <p className="mt-6 text-center text-xs text-slate-400">
-        Engine: <code className="rounded bg-slate-100 px-1.5 py-0.5">{data.engine}</code> · deterministic rule engine, LLM-ready for richer narratives.
+        Insights are generated automatically from attendance, marks and fees.
       </p>
     </div>
   );
@@ -270,24 +274,30 @@ function TrendCard({ title, items, up }: { title: string; items: InsightsData['i
 /* ------------------------------------------------------------------ */
 
 function ParentReportGenerator() {
-  const { data: students } = useApi<Student[]>('/students', { status: 'active' });
   const [id, setId] = useState('');
+  const [search, setSearch] = useState('');
+  const q = useDebounced(search.trim());
+  // Search-as-you-type: at most 20 matches from the server (plus the picked student, via `ids`).
+  const { data: students, loading: searching } = useApi<StudentOption[]>('/students/options', { status: 'active', search: q || undefined, ids: id || undefined });
   const [report, setReport] = useState<StudentReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Only the latest pick may show its report — a slower earlier response is dropped.
+  const reqId = useRef(0);
 
   const generate = async (sid: string) => {
+    const my = ++reqId.current;
     setId(sid);
     setReport(null);
-    if (!sid) return;
+    if (!sid) { setBusy(false); return; }
     setBusy(true);
     try {
       const { data } = await api.get<StudentReport>(`/insights/student/${sid}`);
-      setReport(data);
+      if (my === reqId.current) setReport(data);
     } catch (e) {
-      toast.error(errMsg(e));
+      if (my === reqId.current) toast.error(errMsg(e));
     } finally {
-      setBusy(false);
+      if (my === reqId.current) setBusy(false);
     }
   };
 
@@ -308,11 +318,23 @@ function ParentReportGenerator() {
       <CardHeader title="Generate parent report" subtitle="A friendly progress summary you can share on WhatsApp" icon={<FileText className="h-4 w-4" />} />
       <div className="grid gap-5 lg:grid-cols-3">
         <div>
-          <Select label="Student" value={id} onChange={(e) => generate(e.target.value)}>
-            <option value="">Select a student…</option>
-            {(students ?? []).map((s) => <option key={s._id} value={s._id}>{s.name} · {s.studentCode}</option>)}
-          </Select>
-          <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-400"><Users className="h-3.5 w-3.5" /> {students?.length ?? 0} active students</p>
+          <span className="label">Student</span>
+          <SearchInput value={search} onChange={setSearch} placeholder="Search name or code…" />
+          <ul className="mt-2 max-h-64 space-y-1 overflow-y-auto scrollbar-thin">
+            {(students ?? []).map((s) => (
+              <li key={s._id}>
+                <button type="button" onClick={() => generate(s._id)}
+                  className={clsx('flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition',
+                    id === s._id ? 'bg-brand-50 font-semibold text-brand-700 ring-1 ring-brand-200' : 'text-slate-700 hover:bg-slate-50')}>
+                  <Avatar name={s.name} size="sm" />
+                  <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                  <span className="shrink-0 text-xs text-slate-400">{s.studentCode}</span>
+                </button>
+              </li>
+            ))}
+            {students && !students.length && !searching && <li className="px-3 py-2 text-sm text-slate-400">No active students match “{q}”.</li>}
+          </ul>
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-400"><Users className="h-3.5 w-3.5" /> {searching ? 'Searching…' : 'Showing up to 20 matches — type to narrow down'}</p>
         </div>
         <div className="lg:col-span-2">
           {busy ? (

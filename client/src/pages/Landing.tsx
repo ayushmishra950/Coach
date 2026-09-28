@@ -325,7 +325,7 @@ function Features() {
     { icon: ClipboardList, title: 'Tests & marks', text: 'Enter marks quickly, get ranks, averages and pass rates instantly.', cls: 'bg-violet-50 text-violet-600' },
     { icon: Users, title: 'Parent portal', text: 'Parents see attendance, marks, fees and notices — no more phone calls.', cls: 'bg-pink-50 text-pink-600' },
     { icon: BellRing, title: 'Notifications', text: 'WhatsApp, Email and SMS alerts for absence, fees, results and announcements.', cls: 'bg-green-50 text-green-600' },
-    { icon: BarChart3, title: 'Reports', text: 'Revenue, collections, attendance and performance reports. Export to Excel.', cls: 'bg-cyan-50 text-cyan-600' },
+    { icon: BarChart3, title: 'Reports', text: 'Revenue, collections, attendance and performance reports. Export to CSV (opens in Excel).', cls: 'bg-cyan-50 text-cyan-600' },
     { icon: Brain, title: 'AI insights', text: 'Spot at-risk students early and get plain-English suggestions on what to do.', cls: 'bg-fuchsia-50 text-fuchsia-600', badge: 'Premium' },
   ];
   return (
@@ -580,7 +580,7 @@ function FAQ() {
     { q: 'Is there really a free trial?', a: 'Yes. Every new institute gets a 30-day free pilot with all Premium features. No credit card is needed to start.' },
     { q: 'Do my teachers and parents need to install an app?', a: 'No. CoachFlow works in any browser on phone, tablet or computer. Teachers and parents simply log in with their email.' },
     { q: 'How do WhatsApp notifications work?', a: 'On Growth and Premium plans, CoachFlow sends absence alerts, fee reminders and results to parents through a WhatsApp Business provider connected to your account.' },
-    { q: 'Can I import my existing students?', a: 'Yes. You can add students one by one or bulk-import them from your existing Excel sheet in a few minutes.' },
+    { q: 'Can I import my existing students?', a: 'Yes. You can add students one by one or bulk-import them from a CSV file (save your Excel sheet as CSV) in a few minutes.' },
     { q: 'Is my data safe?', a: 'Your data is stored securely and isolated per institute. Only people you invite can see it, and you can export it any time.' },
     { q: 'Can I change or cancel my plan later?', a: 'Anytime. Upgrade, downgrade or cancel from the Subscription page — no calls, no lock-in.' },
   ];

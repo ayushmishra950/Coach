@@ -1,13 +1,22 @@
-import { CalendarClock, Check, Clock, DoorOpen, Layers, Pencil, Plus, Trash2, Trophy, User, Users } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react';
+import { CalendarClock, Check, Clock, DoorOpen, Layers, Pencil, Plus, Trash2, Trophy, User, Users, X } from 'lucide-react';
+import { useEffect, useState, type FormEvent, type MouseEvent } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
-import { Button, Card, ConfirmDialog, EmptyState, ErrorState, Input, Modal, PageHeader, Progress, SearchInput, Select, Skeleton, clsx } from '../../components/ui';
+import { Button, Card, ConfirmDialog, EmptyState, ErrorState, Input, Modal, PageHeader, Progress, SearchInput, Select, Skeleton, Toggle, clsx } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
-import { useApi } from '../../hooks/useApi';
+import { useApi, useDebounced, usePagedApi } from '../../hooks/useApi';
+import { Pager } from '../../components/Pager';
 import { api, errMsg } from '../../lib/api';
 import { DAYS, fmtDateTime, fmtTime, pctTone } from '../../lib/format';
-import type { Batch, Student, Teacher } from '../../lib/types';
+import type { Batch as BaseBatch } from '../../lib/types';
+
+/** Batch as returned by /batches (co-teachers = other subject teachers). */
+type Batch = BaseBatch & { coTeachers?: { _id: string; name: string }[]; coTeacherIds?: ({ _id: string; name: string } | string)[] };
+type SaveResp = Batch & { warnings?: string[] };
+
+/** Light student row from /students/options and /batches/:id/members. */
+type StudentOpt = { _id: string; name: string; studentCode: string; status: 'active' | 'inactive' };
+type TeacherOpt = { _id: string; name: string; subjects?: string[] };
 
 const BATCH_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f59e0b', '#10b981', '#14b8a6', '#0ea5e9', '#64748b'];
 
@@ -15,6 +24,15 @@ const teacherIdOf = (b?: Batch | null) => {
   const t = b?.teacher ?? b?.teacherId;
   return !t ? '' : typeof t === 'string' ? t : t._id;
 };
+const coTeachersOf = (b?: Batch | null): { _id: string; name: string }[] =>
+  b?.coTeachers ?? (b?.coTeacherIds ?? []).filter((x): x is { _id: string; name: string } => typeof x === 'object' && !!x);
+const errCode = (e: unknown) => (e as { response?: { data?: { code?: string } } })?.response?.data?.code;
+
+/** "Also: A, B" line for a batch's other subject teachers. */
+export function CoTeachers({ list, className }: { list: { _id: string; name: string }[]; className?: string }) {
+  if (!list.length) return null;
+  return <span className={clsx('text-xs text-slate-500', className)}>with {list.map((t) => t.name).join(', ')}</span>;
+}
 
 function DayChips({ days, size = 'sm' }: { days: string[]; size?: 'sm' | 'md' }) {
   return (
@@ -34,13 +52,19 @@ function DayChips({ days, size = 'sm' }: { days: string[]; size?: 'sm' | 'md' })
 
 function BatchModal({ open, onClose, batch, onSaved }: { open: boolean; onClose: () => void; batch: Batch | null; onSaved: () => void }) {
   const editing = !!batch;
-  const { data: teachers } = useApi<Teacher[]>(open ? '/teachers' : null);
-  const { data: students } = useApi<Student[]>(open ? '/students' : null, { status: 'all' });
+  const { data: teachers } = useApi<TeacherOpt[]>(open ? '/teachers/options' : null);
   const [f, setF] = useState<Record<string, string>>({});
   const [days, setDays] = useState<string[]>([]);
   const [color, setColor] = useState(BATCH_COLORS[0]);
-  const [picked, setPicked] = useState<string[]>([]);
+  const [coIds, setCoIds] = useState<string[]>([]);
+  const [active, setActive] = useState(true);
+  // Full selected set (server replaces membership with exactly this list on save).
+  const [picked, setPicked] = useState<StudentOpt[]>([]);
+  // In edit mode, membership is only submitted once the current members have loaded.
+  const [membersReady, setMembersReady] = useState(false);
   const [q, setQ] = useState('');
+  const dq = useDebounced(q.trim(), 250);
+  const { data: results, loading: searching } = useApi<StudentOpt[]>(open ? '/students/options' : null, { search: dq || undefined, status: 'active' });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -50,44 +74,70 @@ function BatchModal({ open, onClose, batch, onSaved }: { open: boolean; onClose:
       startTime: batch?.startTime ?? '17:00', endTime: batch?.endTime ?? '18:00', room: batch?.room ?? '', capacity: batch?.capacity ? String(batch.capacity) : '',
     });
     setDays(batch?.days ?? ['Mon', 'Wed', 'Fri']);
+    setCoIds(coTeachersOf(batch).map((t) => t._id));
+    setActive(batch?.active ?? true);
     setColor(batch?.color ?? BATCH_COLORS[Math.floor(Math.random() * BATCH_COLORS.length)]);
     setQ('');
     setPicked([]);
+    setMembersReady(!batch);
   }, [open, batch]);
 
-  // Pre-select current members once students load (edit mode)
+  // Pre-select current members (edit mode) — includes inactive ones so saving doesn't drop them.
   useEffect(() => {
-    if (!open || !students || !batch) return;
-    setPicked(students.filter((s) => s.batchIds.some((b) => (typeof b === 'string' ? b : b._id) === batch._id)).map((s) => s._id));
-  }, [open, students, batch]);
+    if (!open || !batch) return;
+    let live = true;
+    api.get<StudentOpt[]>(`/batches/${batch._id}/members`)
+      .then(({ data }) => {
+        if (!live) return;
+        setPicked((p) => [...data, ...p.filter((x) => !data.some((m) => m._id === x._id))]);
+        setMembersReady(true);
+      })
+      .catch((err) => live && toast.error(errMsg(err)));
+    return () => { live = false; };
+  }, [open, batch]);
 
   const set = (k: string) => (e: { target: { value: string } }) => setF((p) => ({ ...p, [k]: e.target.value }));
   const toggleDay = (d: string) => setDays((p) => (p.includes(d) ? p.filter((x) => x !== d) : DAYS.filter((x) => x === d || p.includes(x))));
-  const toggleStudent = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const isPicked = (id: string) => picked.some((x) => x._id === id);
+  const toggleStudent = (s: StudentOpt) => setPicked((p) => (p.some((x) => x._id === s._id) ? p.filter((x) => x._id !== s._id) : [...p, s]));
+  const shown = results ?? [];
 
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    // Active students, plus inactive ones already in this batch (so saving doesn't drop them)
-    const list = (students ?? []).filter((x) => x.status === 'active' || picked.includes(x._id));
-    return s ? list.filter((x) => x.name.toLowerCase().includes(s) || x.studentCode.toLowerCase().includes(s) || x.course?.toLowerCase().includes(s)) : list;
-  }, [students, q, picked]);
+  // Keep the teacher dropdown able to show the current teacher even if they're no longer in the active list.
+  const currentTeacher = batch?.teacher ?? (batch && typeof batch.teacherId === 'object' ? batch.teacherId : null);
+  const teacherOpts: TeacherOpt[] = teachers
+    ? [...teachers, ...(currentTeacher && !teachers.some((t) => t._id === currentTeacher._id) ? [{ _id: currentTeacher._id, name: currentTeacher.name }] : [])]
+    : currentTeacher ? [{ _id: currentTeacher._id, name: currentTeacher.name }] : [];
+  // Co-teachers: every teacher option except the lead (keep current co-teachers visible even if inactive now).
+  const currentCo = coTeachersOf(batch);
+  const coOpts: TeacherOpt[] = [
+    ...teacherOpts,
+    ...currentCo.filter((c) => !teacherOpts.some((t) => t._id === c._id)),
+  ].filter((t) => t._id !== f.teacherId);
+  const toggleCo = (id: string) => setCoIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!f.name.trim()) return toast.error('Batch name is required');
     if (!days.length) return toast.error('Pick at least one day');
-    if (f.startTime && f.endTime && f.endTime <= f.startTime) return toast.error('End time must be after start time');
+    if (!f.startTime || !f.endTime) return toast.error('Enter both start and end time');
+    if (f.endTime <= f.startTime) return toast.error('End time must be after start time');
+    const cap = f.capacity ? Number(f.capacity) : 0;
+    if (f.capacity && (!Number.isInteger(cap) || cap < 1 || cap > 1000)) return toast.error('Capacity must be a whole number between 1 and 1000');
+    if (cap && membersReady && picked.length > cap) return toast.error(`This batch has room for ${cap} students — you selected ${picked.length}.`);
     setSaving(true);
     const body: Record<string, unknown> = {
       name: f.name.trim(), course: f.course, subject: f.subject, teacherId: f.teacherId || (editing ? null : undefined),
+      coTeacherIds: coIds.filter((x) => x !== f.teacherId),
       days, startTime: f.startTime, endTime: f.endTime, room: f.room, color,
-      ...(f.capacity && { capacity: Number(f.capacity) }),
-      ...(students && { studentIds: picked }),
+      ...(f.capacity ? { capacity: cap } : editing ? { capacity: '' } : {}),
+      ...(editing && { active }),
+      ...(membersReady && { studentIds: picked.map((x) => x._id) }),
     };
     try {
-      if (editing) await api.put(`/batches/${batch!._id}`, body);
-      else await api.post('/batches', body);
+      const { data } = editing ? await api.put<SaveResp>(`/batches/${batch!._id}`, body) : await api.post<SaveResp>('/batches', body);
       toast.success(editing ? 'Batch updated' : 'Batch created');
+      // Time / room clashes don't block saving — show each one so the owner can decide.
+      for (const w of data?.warnings ?? []) toast(w, { icon: '⚠️', duration: 6000 });
       onSaved();
       onClose();
     } catch (err) {
@@ -107,10 +157,30 @@ function BatchModal({ open, onClose, batch, onSaved }: { open: boolean; onClose:
           <Input label="Subject" value={f.subject ?? ''} onChange={set('subject')} placeholder="e.g. Mathematics" />
           <Select label="Teacher" value={f.teacherId ?? ''} onChange={set('teacherId')} className="sm:col-span-2">
             <option value="">Unassigned</option>
-            {teachers?.filter((t) => t.active || t._id === f.teacherId).map((t) => (
+            {teacherOpts.map((t) => (
               <option key={t._id} value={t._id}>{t.name}{t.subjects?.length ? ` — ${t.subjects.join(', ')}` : ''}</option>
             ))}
           </Select>
+          <div className="sm:col-span-2">
+            <span className="label">Other teachers <span className="font-normal text-slate-400">(optional — e.g. one per subject)</span></span>
+            {!teachers && !currentCo.length ? <Skeleton className="h-9 w-full" /> : coOpts.length === 0 ? (
+              <p className="text-sm text-slate-400">No other teachers to add.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {coOpts.map((t) => {
+                  const on = coIds.includes(t._id);
+                  return (
+                    <button type="button" key={t._id} onClick={() => toggleCo(t._id)} aria-pressed={on}
+                      className={clsx('inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition',
+                        on ? 'border-brand-600 bg-brand-600 text-white shadow-sm' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300')}>
+                      {on && <Check className="h-3 w-3" />}
+                      {t.name}{t.subjects?.length ? <span className={on ? 'text-white/80' : 'text-slate-400'}> · {t.subjects.join(', ')}</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         <div>
@@ -133,6 +203,11 @@ function BatchModal({ open, onClose, batch, onSaved }: { open: boolean; onClose:
           <Input label="Capacity" type="number" min={1} value={f.capacity ?? ''} onChange={set('capacity')} placeholder="40" />
         </div>
 
+        {editing && (
+          <Toggle checked={active} onChange={setActive} label="Active"
+            description="Inactive batches are hidden from attendance and scheduling; their history stays in reports." />
+        )}
+
         <div>
           <span className="label">Colour</span>
           <div className="flex flex-wrap gap-2">
@@ -151,25 +226,41 @@ function BatchModal({ open, onClose, batch, onSaved }: { open: boolean; onClose:
             <span className="label mb-0">Students</span>
             <span className="text-xs font-semibold text-brand-700">{picked.length} selected{f.capacity ? ` / ${f.capacity}` : ''}</span>
           </div>
-          <SearchInput value={q} onChange={setQ} placeholder="Search students…" />
-          <div className="mt-2 max-h-60 overflow-y-auto rounded-xl border border-slate-200 scrollbar-thin">
-            {!students ? (
+          {!membersReady ? (
+            <Skeleton className="mb-2 h-8 w-full" />
+          ) : picked.length > 0 && (
+            <div className="mb-2 flex max-h-32 flex-wrap gap-1.5 overflow-y-auto scrollbar-thin">
+              {picked.map((s) => (
+                <span key={s._id} className="inline-flex items-center gap-1 rounded-full border border-brand-200 bg-brand-50 py-0.5 pl-2.5 pr-1 text-xs font-semibold text-brand-700">
+                  <span className="max-w-[160px] truncate">{s.name}</span>
+                  {s.status === 'inactive' && <span className="text-amber-600">· Inactive</span>}
+                  <button type="button" onClick={() => toggleStudent(s)} className="rounded-full p-0.5 hover:bg-brand-100" aria-label={`Remove ${s.name}`}>
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <SearchInput value={q} onChange={setQ} placeholder="Search students by name or code…" />
+          <div className={clsx('mt-2 max-h-60 overflow-y-auto rounded-xl border border-slate-200 scrollbar-thin', searching && results && 'opacity-60')}>
+            {!results ? (
               <div className="space-y-2 p-3">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-8" />)}</div>
-            ) : filtered.length === 0 ? (
+            ) : shown.length === 0 ? (
               <p className="p-4 text-center text-sm text-slate-400">No students found</p>
             ) : (
               <>
                 <div className="sticky top-0 flex items-center justify-between border-b border-slate-100 bg-white/95 px-3 py-2 text-xs backdrop-blur">
-                  <button type="button" className="font-semibold text-brand-700" onClick={() => setPicked((p) => [...new Set([...p, ...filtered.map((s) => s._id)])])}>Select all shown</button>
-                  <button type="button" className="font-semibold text-slate-500" onClick={() => setPicked((p) => p.filter((id) => !filtered.some((s) => s._id === id)))}>Clear shown</button>
+                  <button type="button" className="font-semibold text-brand-700" onClick={() => setPicked((p) => [...p, ...shown.filter((s) => !p.some((x) => x._id === s._id))])}>Select all shown</button>
+                  <button type="button" className="font-semibold text-slate-500" onClick={() => setPicked((p) => p.filter((x) => !shown.some((s) => s._id === x._id)))}>Clear shown</button>
                 </div>
-                {filtered.map((s) => (
+                {shown.map((s) => (
                   <label key={s._id} className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-slate-50">
-                    <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={picked.includes(s._id)} onChange={() => toggleStudent(s._id)} />
+                    <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={isPicked(s._id)} onChange={() => toggleStudent(s)} />
                     <span className="flex-1 truncate font-medium text-slate-800">{s.name}</span>
-                    <span className="text-xs text-slate-400">{s.status === 'inactive' && <span className="mr-1 text-amber-600">Inactive ·</span>}{s.studentCode}{s.course && ` · ${s.course}`}</span>
+                    <span className="text-xs text-slate-400">{s.status === 'inactive' && <span className="mr-1 text-amber-600">Inactive ·</span>}{s.studentCode}</span>
                   </label>
                 ))}
+                {shown.length >= 20 && <p className="px-3 py-2 text-center text-xs text-slate-400">Showing the first 20 matches — type to narrow down.</p>}
               </>
             )}
           </div>
@@ -183,16 +274,21 @@ export default function Batches() {
   const { session } = useAuth();
   const isOwner = session?.user.role === 'owner';
   const nav = useNavigate();
-  const { data, loading, error, reload } = useApi<Batch[]>('/batches');
   const [search, setSearch] = useState('');
+  const dq = useDebounced(search.trim(), 300);
+  // Search runs on the server (name, subject, course, room), 20 batches per page.
+  const { data, loading, error, reload, pager, page, setPage } = usePagedApi<Batch>('/batches', { search: dq || undefined });
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Batch | null>(null);
   const [del, setDel] = useState<Batch | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Server refused the delete because the batch has history (HAS_HISTORY) — offer "mark inactive" instead.
+  const [delBlocked, setDelBlocked] = useState<string | null>(null);
 
-  const q = search.trim().toLowerCase();
-  const list = (data ?? []).filter((b) => !q || [b.name, b.course, b.subject, b.teacher?.name, b.room].some((x) => x?.toLowerCase().includes(q)));
-  const totalStudents = (data ?? []).reduce((s, b) => s + (b.studentCount ?? 0), 0);
+  const items = data?.items ?? [];
+  const list = items;
+  // Enrolments can only be summed exactly when every batch is on this one page.
+  const totalStudents = data && data.pages <= 1 && !dq ? items.reduce((s, b) => s + (b.studentCount ?? 0), 0) : null;
 
   const open = (b: Batch | null) => { setEditing(b); setFormOpen(true); };
   const stop = (fn: () => void) => (e: MouseEvent) => { e.stopPropagation(); fn(); };
@@ -204,6 +300,24 @@ export default function Batches() {
       await api.delete(`/batches/${del._id}`);
       toast.success('Batch deleted');
       setDel(null);
+      if (items.length === 1 && page > 1) setPage(page - 1);
+      else reload();
+    } catch (e) {
+      if (errCode(e) === 'HAS_HISTORY') setDelBlocked(errMsg(e));
+      else toast.error(errMsg(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const deactivate = async () => {
+    if (!del) return;
+    setDeleting(true);
+    try {
+      await api.put(`/batches/${del._id}`, { active: false });
+      toast.success(`${del.name} marked inactive`);
+      setDel(null);
+      setDelBlocked(null);
       reload();
     } catch (e) {
       toast.error(errMsg(e));
@@ -211,22 +325,23 @@ export default function Batches() {
       setDeleting(false);
     }
   };
+  const closeDel = () => { setDel(null); setDelBlocked(null); };
 
   return (
     <div>
       <PageHeader title="Batches"
-        subtitle={data ? `${data.length} batch${data.length === 1 ? '' : 'es'} · ${totalStudents} enrolments` : isOwner ? 'Organise classes, timings and teachers.' : 'Your batches'}
+        subtitle={data ? `${data.total} batch${data.total === 1 ? '' : 'es'}${totalStudents != null ? ` · ${totalStudents} enrolments` : ''}` : isOwner ? 'Organise classes, timings and teachers.' : 'Your batches'}
         actions={isOwner && <Button icon={<Plus className="h-4 w-4" />} onClick={() => open(null)}>Create batch</Button>} />
 
-      {(data?.length ?? 0) > 3 && <SearchInput value={search} onChange={setSearch} placeholder="Search batches, subjects, teachers…" className="mb-5 max-w-md" />}
+      {((data?.total ?? 0) > 3 || !!search) && <SearchInput value={search} onChange={setSearch} placeholder="Search batches, subjects, rooms…" className="mb-5 max-w-md" />}
 
       {error ? <ErrorState message={error} onRetry={reload} /> : loading && !data ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-72" />)}</div>
       ) : list.length === 0 ? (
         <Card>
-          <EmptyState icon={<Layers className="h-7 w-7" />} title={data?.length ? 'No batches match' : 'No batches yet'}
-            text={data?.length ? 'Try a different search.' : isOwner ? 'Create your first batch to start marking attendance and scheduling tests.' : 'You have not been assigned any batches yet.'}
-            action={isOwner && !data?.length && <Button icon={<Plus className="h-4 w-4" />} onClick={() => open(null)}>Create batch</Button>} />
+          <EmptyState icon={<Layers className="h-7 w-7" />} title={data?.total ? 'No batches match' : 'No batches yet'}
+            text={data?.total ? 'Try a different search.' : isOwner ? 'Create your first batch to start marking attendance and scheduling tests.' : 'You have not been assigned any batches yet.'}
+            action={isOwner && !data?.total && <Button icon={<Plus className="h-4 w-4" />} onClick={() => open(null)}>Create batch</Button>} />
         </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -234,7 +349,7 @@ export default function Batches() {
             const cap = b.capacity ?? 0;
             const count = b.studentCount ?? 0;
             return (
-              <div key={b._id} role="button" tabIndex={0} onClick={() => nav(`/app/batches/${b._id}`)} onKeyDown={(e) => e.key === 'Enter' && nav(`/app/batches/${b._id}`)}
+              <div key={b._id} role="button" tabIndex={0} onClick={() => nav(`/app/batches/${b._id}`)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); nav(`/app/batches/${b._id}`); } }}
                 className={clsx('card group relative cursor-pointer overflow-hidden transition hover:-translate-y-0.5 hover:shadow-md', !b.active && 'opacity-70')}>
                 <div className="h-1.5" style={{ background: `linear-gradient(90deg, ${b.color}, ${b.color}99)` }} />
                 <div className="card-pad">
@@ -253,7 +368,10 @@ export default function Batches() {
 
                   <div className="mt-3 flex items-center gap-2 text-sm text-slate-600">
                     <User className="h-4 w-4 text-slate-400" />
-                    {b.teacher?.name ?? <span className="text-amber-600">No teacher assigned</span>}
+                    <span className="min-w-0 truncate">
+                      {b.teacher?.name ?? <span className="text-amber-600">No teacher assigned</span>}
+                      {coTeachersOf(b).length > 0 && <CoTeachers list={coTeachersOf(b)} className="ml-1" />}
+                    </span>
                   </div>
 
                   <div className="mt-4"><DayChips days={b.days} /></div>
@@ -293,12 +411,18 @@ export default function Batches() {
           })}
         </div>
       )}
+      {pager && <Card pad={false} className="mt-4 overflow-hidden"><Pager {...pager} noun="batches" /></Card>}
 
       {isOwner && <>
         <BatchModal open={formOpen} onClose={() => setFormOpen(false)} batch={editing} onSaved={reload} />
-        <ConfirmDialog open={!!del} onClose={() => setDel(null)} onConfirm={remove} loading={deleting} danger confirmLabel="Delete batch"
-          title={`Delete ${del?.name ?? 'batch'}?`}
-          text="Students will be removed from this batch (they won't be deleted). Attendance and test history for this batch may no longer be accessible." />
+        {delBlocked ? (
+          <ConfirmDialog open={!!del} onClose={closeDel} onConfirm={del?.active === false ? closeDel : deactivate} loading={deleting} confirmLabel={del?.active === false ? 'OK' : 'Mark inactive'}
+            title={`Can't delete ${del?.name ?? 'batch'}`} text={delBlocked} />
+        ) : (
+          <ConfirmDialog open={!!del} onClose={closeDel} onConfirm={remove} loading={deleting} danger confirmLabel="Delete batch"
+            title={`Delete ${del?.name ?? 'batch'}?`}
+            text="Students will be removed from this batch (they won't be deleted). Batches with attendance or test history can't be deleted — mark them inactive instead." />
+        )}
       </>}
     </div>
   );

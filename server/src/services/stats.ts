@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { Attendance, Invoice, Test } from '../models/index.js';
-import { addDays, ymd } from '../utils/dates.js';
+import { addDays, startOfDay, ymd } from '../utils/dates.js';
 
 type Id = Types.ObjectId;
 const key = (id: unknown) => String(id);
@@ -8,8 +8,12 @@ const key = (id: unknown) => String(id);
 export async function attendanceByStudent(instituteId: Id, studentIds?: Id[], since?: string) {
   const match: Record<string, unknown> = { instituteId };
   if (since) match.date = { $gte: since };
+  // Filter on the student BEFORE unwinding (uses the records.studentId index), so a page of
+  // 20 students reads only their class days instead of the institute's whole history.
+  if (studentIds) match['records.studentId'] = { $in: studentIds };
   const rows = await Attendance.aggregate<{ _id: Id; total: number; present: number }>([
     { $match: match },
+    { $project: { records: 1 } },
     { $unwind: '$records' },
     ...(studentIds ? [{ $match: { 'records.studentId': { $in: studentIds } } }] : []),
     {
@@ -27,7 +31,8 @@ export async function attendanceByStudent(instituteId: Id, studentIds?: Id[], si
 
 export async function scoresByStudent(instituteId: Id, studentIds?: Id[]) {
   const rows = await Test.aggregate<{ _id: Id; avg: number; count: number }>([
-    { $match: { instituteId, status: { $in: ['graded', 'published'] } } },
+    { $match: { instituteId, status: { $in: ['graded', 'published'] }, ...(studentIds ? { 'results.studentId': { $in: studentIds } } : {}) } },
+    { $project: { maxMarks: 1, results: 1 } },
     { $unwind: '$results' },
     { $match: { 'results.absent': { $ne: true }, 'results.marks': { $type: 'number' }, ...(studentIds ? { 'results.studentId': { $in: studentIds } } : {}) } },
     { $group: { _id: '$results.studentId', avg: { $avg: { $multiply: [{ $divide: ['$results.marks', '$maxMarks'] }, 100] } }, count: { $sum: 1 } } },
@@ -38,7 +43,8 @@ export async function scoresByStudent(instituteId: Id, studentIds?: Id[]) {
 }
 
 export async function feesByStudent(instituteId: Id, studentIds?: Id[]) {
-  const today = new Date();
+  // A fee is overdue from the day AFTER its due date (not from 05:30 on the due date itself).
+  const today = startOfDay();
   const rows = await Invoice.aggregate<{ _id: Id; total: number; paid: number; overdue: number; nextDue: Date | null }>([
     { $match: { instituteId, ...(studentIds ? { studentId: { $in: studentIds } } : {}) } },
     {
@@ -62,6 +68,7 @@ export async function feesByStudent(instituteId: Id, studentIds?: Id[]) {
 export async function absenceStreaks(instituteId: Id, threshold = 3, batchIds?: Id[] | null) {
   const since = ymd(addDays(new Date(), -45));
   const docs = await Attendance.find({ instituteId, date: { $gte: since }, ...(batchIds ? { batchId: { $in: batchIds } } : {}) })
+    .select('date records')
     .sort({ date: -1 })
     .lean();
   const streak = new Map<string, { count: number; broken: boolean; since: string }>();
@@ -80,7 +87,7 @@ export async function absenceStreaks(instituteId: Id, threshold = 3, batchIds?: 
   return [...streak.entries()]
     .filter(([, s]) => s.count >= threshold)
     .map(([studentId, s]) => ({ studentId, count: s.count, since: s.since }))
-    .sort((a, b) => b.count - a.count);
+    .sort((a, b) => b.count - a.count || a.studentId.localeCompare(b.studentId)); // stable order for paging
 }
 
 export const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);

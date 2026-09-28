@@ -27,12 +27,17 @@ const Subscription = lazy(() => import('./pages/app/Subscription'));
 const Settings = lazy(() => import('./pages/app/Settings'));
 
 const ParentPortal = lazy(() => import('./pages/parent/ParentPortal'));
+const Messages = lazy(() => import('./pages/Messages'));
+const PortalMessages = lazy(() => import('./pages/Messages').then((m) => ({ default: m.PortalMessagesPage })));
 
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
 const AdminInstitutes = lazy(() => import('./pages/admin/AdminInstitutes'));
 const AdminPayments = lazy(() => import('./pages/admin/AdminPayments'));
 const AdminTickets = lazy(() => import('./pages/admin/AdminTickets'));
 const AdminPlans = lazy(() => import('./pages/admin/AdminPlans'));
+const AdminAudit = lazy(() => import('./pages/admin/AdminAudit'));
+const Account = lazy(() => import('./pages/Account'));
+const PortalAccount = lazy(() => import('./pages/Account').then((m) => ({ default: m.PortalAccount })));
 
 export default function App() {
   const { session, loading } = useAuth();
@@ -61,13 +66,17 @@ export default function App() {
           <Route path="reports" element={ownerOnly(<Reports />)} />
           <Route path="insights" element={ownerOnly(<Insights />)} />
           <Route path="announcements" element={<Announcements />} />
+          <Route path="messages" element={<Messages />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="subscription" element={ownerOnly(<Subscription />)} />
           <Route path="settings" element={ownerOnly(<Settings />)} />
+          <Route path="account" element={<Account />} />
         </Route>
 
         <Route path="/portal" element={<Protected roles={['parent']}><ParentPortal /></Protected>} />
         <Route path="/portal/receipt/:id" element={<Protected roles={['parent']}><Receipt /></Protected>} />
+        <Route path="/portal/messages" element={<Protected roles={['parent']}><PortalMessages /></Protected>} />
+        <Route path="/portal/account" element={<Protected roles={['parent']}><PortalAccount /></Protected>} />
 
         <Route path="/admin" element={<Protected roles={['superadmin']}><Shell variant="admin" /></Protected>}>
           <Route index element={<AdminDashboard />} />
@@ -75,6 +84,8 @@ export default function App() {
           <Route path="payments" element={<AdminPayments />} />
           <Route path="tickets" element={<AdminTickets />} />
           <Route path="plans" element={<AdminPlans />} />
+          <Route path="audit" element={<AdminAudit />} />
+          <Route path="account" element={<Account />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, GraduationCap, MapPin, Phone, Printer } from 'lucide-react';
+import { ArrowLeft, Ban, CheckCircle2, GraduationCap, MapPin, Phone, Printer } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button, ErrorState, PageLoader } from '../../components/ui';
@@ -9,10 +9,12 @@ import { fmtDate, fmtDateTime, inr } from '../../lib/format';
 interface ReceiptResp {
   payment: {
     _id: string; amount: number; method: string; receiptNo: string; reference?: string; note?: string; paidAt: string;
+    status?: 'valid' | 'void'; voidReason?: string; voidedAt?: string; balanceAfter?: number | null;
+    collectedBy?: { _id: string; name?: string } | string | null;
     studentId: { _id: string; name: string; studentCode: string; parentName?: string; course?: string } | null;
     invoiceId: { _id: string; title: string; amount: number; paidAmount?: number; dueDate?: string } | null;
   };
-  institute: { name: string; phone?: string; address?: string; city?: string };
+  institute: { name: string; phone?: string; email?: string; address?: string; city?: string; gstin?: string; logoText?: string; brandColor?: string };
 }
 
 const METHOD_LABEL: Record<string, string> = { upi: 'UPI', cash: 'Cash', bank: 'Bank transfer', card: 'Card', online: 'Online payment' };
@@ -67,7 +69,12 @@ export default function Receipt() {
   const { payment: p, institute: inst } = data;
   const s = p.studentId;
   const inv = p.invoiceId;
-  const balance = inv ? Math.max(0, inv.amount - (inv.paidAmount ?? inv.amount)) : null;
+  const isVoid = p.status === 'void';
+  // Balance right after this payment (stored on new receipts); older receipts fall back to the invoice's current balance.
+  const balance = typeof p.balanceAfter === 'number'
+    ? Math.max(0, p.balanceAfter)
+    : inv ? Math.max(0, inv.amount - (inv.paidAmount ?? inv.amount)) : null;
+  const collectedBy = p.collectedBy && typeof p.collectedBy === 'object' ? p.collectedBy.name : undefined;
 
   return wrap(
     <div className="mx-auto max-w-2xl">
@@ -77,7 +84,14 @@ export default function Receipt() {
       </div>
 
       <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-soft print:rounded-none print:border-0 print:shadow-none">
-        <div className="h-2 bg-gradient-to-r from-brand-600 via-violet-600 to-fuchsia-600" />
+        {isVoid && (
+          <div aria-hidden className="pointer-events-none absolute inset-0 z-10 grid place-items-center overflow-hidden">
+            <span className="-rotate-[24deg] select-none rounded-2xl border-[6px] border-rose-500/40 px-8 py-2 text-6xl font-black tracking-[0.2em] text-rose-500/30 sm:text-7xl">
+              CANCELLED
+            </span>
+          </div>
+        )}
+        <div className={isVoid ? 'h-2 bg-rose-500' : 'h-2 bg-gradient-to-r from-brand-600 via-violet-600 to-fuchsia-600'} />
 
         {/* Institute header */}
         <div className="flex flex-col gap-4 border-b border-dashed border-slate-200 px-6 py-6 sm:flex-row sm:items-start sm:justify-between sm:px-8">
@@ -93,6 +107,7 @@ export default function Receipt() {
                 </p>
               )}
               {inst.phone && <p className="mt-0.5 flex items-center gap-1 text-xs text-slate-500"><Phone className="h-3 w-3" /> {inst.phone}</p>}
+              {inst.gstin && <p className="mt-0.5 text-xs font-semibold text-slate-600">GSTIN: <span className="font-mono">{inst.gstin}</span></p>}
             </div>
           </div>
           <div className="sm:text-right">
@@ -102,17 +117,43 @@ export default function Receipt() {
           </div>
         </div>
 
-        {/* Success banner */}
-        <div className="px-6 pt-6 sm:px-8">
-          <div className="flex flex-col items-center rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 px-4 py-6 text-center ring-1 ring-emerald-100">
-            <div className="grid h-14 w-14 place-items-center rounded-full bg-emerald-500 text-white shadow-lg shadow-emerald-500/30">
-              <CheckCircle2 className="h-8 w-8" />
+        {isVoid ? (
+          /* Cancelled banner (printed too, so a cancelled receipt can never pass as valid) */
+          <div className="px-6 pt-6 sm:px-8">
+            <div className="flex flex-col items-center rounded-2xl bg-rose-50 px-4 py-6 text-center ring-1 ring-rose-200">
+              <div className="grid h-14 w-14 place-items-center rounded-full bg-rose-500 text-white print:hidden">
+                <Ban className="h-8 w-8" />
+              </div>
+              <p className="mt-3 text-lg font-extrabold uppercase tracking-wide text-rose-700">Receipt cancelled</p>
+              {p.voidReason && <p className="mt-1 text-sm text-rose-700">Reason: {p.voidReason}</p>}
+              {p.voidedAt && <p className="mt-0.5 text-xs text-rose-600/80">Cancelled on {fmtDateTime(p.voidedAt)}</p>}
+              <p className="mt-3 text-3xl font-extrabold tracking-tight text-slate-400 line-through">{inr(p.amount)}</p>
+              <p className="mt-1 text-xs text-slate-500">This amount was not counted as received.</p>
             </div>
-            <p className="mt-3 text-lg font-extrabold text-emerald-700">Payment Successful ✓</p>
-            <p className="mt-2 text-4xl font-extrabold tracking-tight text-slate-900">{inr(p.amount)}</p>
-            <p className="mt-1 text-sm italic text-slate-600">{amountInWords(p.amount)}</p>
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Success banner (screen only) */}
+            <div className="px-6 pt-6 print:hidden sm:px-8">
+              <div className="flex flex-col items-center rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 px-4 py-6 text-center ring-1 ring-emerald-100">
+                <div className="grid h-14 w-14 place-items-center rounded-full bg-emerald-500 text-white shadow-lg shadow-emerald-500/30">
+                  <CheckCircle2 className="h-8 w-8" />
+                </div>
+                <p className="mt-3 text-lg font-extrabold text-emerald-700">Payment successful</p>
+                <p className="mt-2 text-4xl font-extrabold tracking-tight text-slate-900">{inr(p.amount)}</p>
+                <p className="mt-1 text-sm italic text-slate-600">{amountInWords(p.amount)}</p>
+              </div>
+            </div>
+            {/* Printed amount block */}
+            <div className="hidden px-6 pt-6 print:block sm:px-8">
+              <div className="rounded-xl border border-slate-300 px-4 py-4 text-center">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Amount received</p>
+                <p className="mt-1 text-3xl font-extrabold text-slate-900">{inr(p.amount)}</p>
+                <p className="mt-1 text-sm italic text-slate-600">{amountInWords(p.amount)}</p>
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Details */}
         <div className="grid gap-x-8 gap-y-4 px-6 py-6 sm:grid-cols-2 sm:px-8">
@@ -122,6 +163,7 @@ export default function Receipt() {
           <Detail label="Payment date" value={fmtDate(p.paidAt, { day: 'numeric', month: 'long', year: 'numeric' })} />
           <Detail label="Payment method" value={METHOD_LABEL[p.method] ?? p.method} />
           <Detail label="Reference" value={p.reference || '—'} mono={!!p.reference} />
+          {collectedBy && <Detail label="Collected by" value={collectedBy} />}
           {p.note && <Detail label="Note" value={p.note} className="sm:col-span-2" />}
         </div>
 
@@ -130,9 +172,12 @@ export default function Receipt() {
             <table className="w-full text-sm">
               <tbody>
                 <tr className="border-b border-slate-100"><td className="px-4 py-2.5 text-slate-500">Installment amount</td><td className="px-4 py-2.5 text-right font-semibold">{inr(inv.amount)}</td></tr>
-                <tr className="border-b border-slate-100"><td className="px-4 py-2.5 text-slate-500">Paid now</td><td className="px-4 py-2.5 text-right font-semibold text-emerald-600">{inr(p.amount)}</td></tr>
-                {balance != null && (
-                  <tr className="bg-slate-50"><td className="px-4 py-2.5 font-semibold text-slate-700">Balance remaining</td><td className="px-4 py-2.5 text-right font-extrabold text-slate-900">{inr(balance)}</td></tr>
+                <tr className="border-b border-slate-100">
+                  <td className="px-4 py-2.5 text-slate-500">{isVoid ? 'Amount (cancelled)' : 'Paid now'}</td>
+                  <td className={isVoid ? 'px-4 py-2.5 text-right font-semibold text-slate-400 line-through' : 'px-4 py-2.5 text-right font-semibold text-emerald-600'}>{inr(p.amount)}</td>
+                </tr>
+                {balance != null && !isVoid && (
+                  <tr className="bg-slate-50"><td className="px-4 py-2.5 font-semibold text-slate-700">Balance after this payment</td><td className="px-4 py-2.5 text-right font-extrabold text-slate-900">{inr(balance)}</td></tr>
                 )}
               </tbody>
             </table>
@@ -141,11 +186,11 @@ export default function Receipt() {
 
         <div className="flex flex-col items-center justify-between gap-4 border-t border-dashed border-slate-200 bg-slate-50/60 px-6 py-5 text-xs text-slate-500 sm:flex-row sm:px-8">
           <p>This is a computer-generated receipt and does not require a signature.</p>
-          <p className="font-semibold text-slate-400">Powered by <span className="text-gradient">CoachFlow</span></p>
+          <p className="text-[10px] text-slate-400 print:hidden">Powered by CoachFlow</p>
         </div>
       </div>
 
-      <p className="no-print mt-4 text-center text-xs text-slate-400">Thank you for your payment!</p>
+      {!isVoid && <p className="no-print mt-4 text-center text-xs text-slate-400">Thank you for your payment!</p>}
     </div>,
   );
 }

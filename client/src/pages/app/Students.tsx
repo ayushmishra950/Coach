@@ -4,7 +4,8 @@ import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import { Avatar, Badge, Button, Card, EmptyState, ErrorState, Input, Modal, PageHeader, SearchInput, Select, Skeleton, Tabs, Textarea, clsx } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
-import { useApi, useDebounced } from '../../hooks/useApi';
+import { useApi, useDebounced, usePagedApi } from '../../hooks/useApi';
+import { Pager } from '../../components/Pager';
 import { api, errMsg } from '../../lib/api';
 import { downloadCSV, inr, pctTone, ymd } from '../../lib/format';
 import type { Batch, BatchRef, Student } from '../../lib/types';
@@ -57,7 +58,7 @@ export function StudentFormModal({ open, onClose, student, onSaved }: {
   open: boolean; onClose: () => void; student?: Student | null; onSaved: (s: Student) => void;
 }) {
   const editing = !!student;
-  const { data: batches } = useApi<Batch[]>(open ? '/batches' : null);
+  const { data: batches } = useApi<Batch[]>(open ? '/batches/options' : null);
   const [f, setF] = useState<FormState>({} as FormState);
   const [batchIds, setBatchIds] = useState<string[]>([]);
   const [withFee, setWithFee] = useState(false);
@@ -68,7 +69,7 @@ export function StudentFormModal({ open, onClose, student, onSaved }: {
     setF({
       name: student?.name ?? '', phone: student?.phone ?? '', dob: toDateInput(student?.dob), gender: student?.gender ?? '',
       address: student?.address ?? '', parentName: student?.parentName ?? '', parentPhone: student?.parentPhone ?? '',
-      parentEmail: student?.parentEmail ?? '', course: student?.course ?? '', joiningDate: toDateInput(student?.joiningDate) || ymd(),
+      parentEmail: student?.parentEmail ?? '', course: student?.course ?? '', joiningDate: student ? toDateInput(student.joiningDate) : ymd(),
       studentCode: student?.studentCode ?? '', feeTotal: '', installments: '3', firstDueDate: ymd(), intervalMonths: '3',
     } as FormState);
     setBatchIds(batchIdsOf(student));
@@ -199,7 +200,9 @@ export function StudentFormModal({ open, onClose, student, onSaved }: {
 /* CSV import                                                          */
 /* ------------------------------------------------------------------ */
 
-const CSV_HEADERS = ['name', 'phone', 'gender', 'parentName', 'parentPhone', 'parentEmail', 'course'] as const;
+const CSV_HEADERS = ['name', 'phone', 'gender', 'parentName', 'parentPhone', 'parentEmail', 'course', 'batch'] as const;
+
+interface ImportResult { imported: number; duplicates: number; skipped: number; errors: { row: number; name: string; error: string }[] }
 
 function parseCSV(text: string): string[][] {
   const rows: string[][] = [];
@@ -248,7 +251,8 @@ function toStudents(text: string) {
 function ImportModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const [text, setText] = useState('');
   const [saving, setSaving] = useState(false);
-  useEffect(() => { if (open) setText(''); }, [open]);
+  const [result, setResult] = useState<ImportResult | null>(null);
+  useEffect(() => { if (open) { setText(''); setResult(null); } }, [open]);
   const parsed = useMemo(() => toStudents(text), [text]);
   const valid = parsed.filter((r) => r.name);
 
@@ -260,18 +264,21 @@ function ImportModal({ open, onClose, onDone }: { open: boolean; onClose: () => 
 
   const template = () =>
     downloadCSV('coachflow-students-template', [
-      { name: 'Aarav Sharma', phone: '9876543210', gender: 'male', parentName: 'Rajesh Sharma', parentPhone: '9876500000', parentEmail: 'rajesh@example.com', course: 'Class 10' },
-      { name: 'Diya Patel', phone: '9812345678', gender: 'female', parentName: 'Meena Patel', parentPhone: '9812300000', parentEmail: '', course: 'Class 12' },
+      { name: 'Aarav Sharma', phone: '9876543210', gender: 'male', parentName: 'Rajesh Sharma', parentPhone: '9876500000', parentEmail: 'rajesh@example.com', course: 'Class 10', batch: 'Class 10 Maths' },
+      { name: 'Diya Patel', phone: '9812345678', gender: 'female', parentName: 'Meena Patel', parentPhone: '9812300000', parentEmail: '', course: 'Class 12', batch: '' },
     ]);
 
   const submit = async () => {
     if (!valid.length) return toast.error('No valid rows — each row needs a name');
     setSaving(true);
     try {
-      const { data } = await api.post<{ imported: number; skipped: number }>('/students/import', { students: parsed });
-      toast.success(`Imported ${data.imported} student${data.imported === 1 ? '' : 's'}${data.skipped ? ` · ${data.skipped} skipped` : ''}`);
+      const { data } = await api.post<ImportResult>('/students/import', { students: parsed });
+      const errors = data.errors ?? [];
+      if (data.imported > 0) toast.success(`Imported ${data.imported} student${data.imported === 1 ? '' : 's'}`);
+      else toast.error('No new students were imported');
       onDone();
-      onClose();
+      if (!data.duplicates && !data.skipped && !errors.length) onClose();
+      else setResult({ ...data, errors });
     } catch (err) {
       toast.error(errMsg(err));
     } finally {
@@ -281,14 +288,59 @@ function ImportModal({ open, onClose, onDone }: { open: boolean; onClose: () => 
 
   return (
     <Modal open={open} onClose={onClose} size="lg" title="Import students from CSV" subtitle="Bulk-add students in seconds. Student codes are generated automatically."
-      footer={<>
+      footer={result ? (
+        <>
+          <Button variant="secondary" onClick={() => { setResult(null); setText(''); }}>Import another file</Button>
+          <Button onClick={onClose}>Done</Button>
+        </>
+      ) : <>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button onClick={submit} loading={saving} disabled={!valid.length} icon={<Upload className="h-4 w-4" />}>Import {valid.length || ''} students</Button>
       </>}>
+      {result ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl bg-emerald-50 p-4 text-center">
+              <p className="text-2xl font-extrabold text-emerald-700">{result.imported}</p>
+              <p className="text-xs font-semibold text-emerald-700/80">Imported</p>
+            </div>
+            <div className="rounded-2xl bg-amber-50 p-4 text-center">
+              <p className="text-2xl font-extrabold text-amber-700">{result.duplicates}</p>
+              <p className="text-xs font-semibold text-amber-700/80">Duplicates skipped</p>
+            </div>
+            <div className="rounded-2xl bg-rose-50 p-4 text-center">
+              <p className="text-2xl font-extrabold text-rose-700">{result.errors.length + result.skipped}</p>
+              <p className="text-xs font-semibold text-rose-700/80">Rows with errors</p>
+            </div>
+          </div>
+          {result.duplicates > 0 && (
+            <p className="text-sm text-slate-500">Duplicates are students already in your institute with the same name and parent phone.</p>
+          )}
+          {result.skipped > 0 && (
+            <p className="text-sm text-slate-500">{result.skipped} row{result.skipped === 1 ? ' was' : 's were'} skipped because the name was missing.</p>
+          )}
+          {result.errors.length > 0 && (
+            <div>
+              <p className="mb-2 text-sm font-semibold text-slate-700">Rows that could not be imported</p>
+              <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 text-sm">
+                {result.errors.slice(0, 8).map((e, i) => (
+                  <li key={i} className="flex items-start justify-between gap-3 px-3 py-2">
+                    <span className="font-semibold text-slate-800">Row {e.row}{e.name && ` · ${e.name}`}</span>
+                    <span className="text-right text-rose-600">{e.error}</span>
+                  </li>
+                ))}
+              </ul>
+              {result.errors.length > 8 && <p className="mt-2 text-xs text-slate-400">…and {result.errors.length - 8} more</p>}
+              <p className="mt-2 text-xs text-slate-400">Row numbers count data rows only (the header row is not counted).</p>
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="space-y-4">
         <div className="flex flex-col gap-3 rounded-2xl bg-brand-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-sm text-slate-600">
             Columns: <code className="rounded bg-white px-1.5 py-0.5 text-xs text-brand-700">{CSV_HEADERS.join(',')}</code>
+            <p className="mt-1 text-xs text-slate-500">Only <b>name</b> is required. Put a batch name in the <b>batch</b> column to add the student to that batch. Students already added (same name and parent phone) are skipped.</p>
           </div>
           <button type="button" onClick={template} className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand-700 hover:underline">
             <Download className="h-4 w-4" /> Download template
@@ -314,12 +366,12 @@ function ImportModal({ open, onClose, onDone }: { open: boolean; onClose: () => 
             </div>
             <div className="table-wrap rounded-xl border border-slate-200">
               <table className="table">
-                <thead><tr><th>Name</th><th>Phone</th><th>Parent</th><th>Parent phone</th><th>Course</th></tr></thead>
+                <thead><tr><th>Name</th><th>Phone</th><th>Parent</th><th>Parent phone</th><th>Course</th><th>Batch</th></tr></thead>
                 <tbody>
                   {parsed.slice(0, 6).map((r, i) => (
                     <tr key={i} className={!r.name ? 'bg-rose-50/60' : ''}>
                       <td className="font-semibold">{r.name || <span className="text-rose-500">— missing —</span>}</td>
-                      <td>{r.phone || '—'}</td><td>{r.parentName || '—'}</td><td>{r.parentPhone || '—'}</td><td>{r.course || '—'}</td>
+                      <td>{r.phone || '—'}</td><td>{r.parentName || '—'}</td><td>{r.parentPhone || '—'}</td><td>{r.course || '—'}</td><td>{r.batch || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -329,6 +381,7 @@ function ImportModal({ open, onClose, onDone }: { open: boolean; onClose: () => 
           </div>
         )}
       </div>
+      )}
     </Modal>
   );
 }
@@ -358,18 +411,18 @@ export default function Students() {
   const [batchId, setBatchId] = useState('');
   const [status, setStatus] = useState<StatusTab>('active');
   const q = useDebounced(search, 300);
-  const { data, loading, error, reload } = useApi<Student[]>('/students', { search: q || undefined, batchId: batchId || undefined, status });
-  const { data: batches } = useApi<Batch[]>('/batches');
+  const { data, loading, error, reload, pager } = usePagedApi<Student>('/students', { search: q || undefined, batchId: batchId || undefined, status });
+  const { data: batches } = useApi<Batch[]>('/batches/options');
   const [formOpen, setFormOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
-  const list = data ?? [];
+  const list = data?.items ?? [];
   const overdueCount = list.filter((s) => (s.fees?.overdue ?? 0) > 0).length;
 
   return (
     <div>
       <PageHeader
-        title={<span className="flex items-center gap-3">Students {data && <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-sm font-bold text-brand-700">{list.length}</span>}</span>}
+        title={<span className="flex items-center gap-3">Students {data && <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-sm font-bold text-brand-700">{data.total}</span>}</span>}
         subtitle={isOwner ? 'Manage admissions, batches, parents and fees in one place.' : 'Students in your batches.'}
         actions={isOwner && <>
           <Button variant="secondary" icon={<Upload className="h-4 w-4" />} onClick={() => setImportOpen(true)}>Import CSV</Button>
@@ -389,7 +442,7 @@ export default function Students() {
         </div>
         {isOwner && overdueCount > 0 && status !== 'inactive' && (
           <div className="border-t border-slate-100 px-4 py-2.5 text-xs font-medium text-rose-600">
-            {overdueCount} student{overdueCount === 1 ? ' has' : 's have'} overdue fees in this view.
+            {overdueCount} student{overdueCount === 1 ? ' has' : 's have'} overdue fees on this page.
           </div>
         )}
       </Card>
@@ -399,9 +452,9 @@ export default function Students() {
       ) : list.length === 0 ? (
         <Card>
           <EmptyState icon={<UserPlus className="h-7 w-7" />}
-            title={q || batchId ? 'No students match your filters' : 'No students yet'}
-            text={q || batchId ? 'Try a different search or batch.' : isOwner ? 'Add your first student or import a whole list from a CSV file.' : 'Students assigned to your batches will appear here.'}
-            action={isOwner && !q && !batchId && <Button icon={<Plus className="h-4 w-4" />} onClick={() => setFormOpen(true)}>Add student</Button>} />
+            title={q || batchId ? 'No students match your filters' : status === 'inactive' ? 'No inactive students' : 'No students yet'}
+            text={q || batchId ? 'Try a different search or batch.' : status === 'inactive' ? 'Students you mark inactive will appear here.' : isOwner ? 'Add your first student or import a whole list from a CSV file.' : 'Students assigned to your batches will appear here.'}
+            action={isOwner && !q && !batchId && status !== 'inactive' && <Button icon={<Plus className="h-4 w-4" />} onClick={() => setFormOpen(true)}>Add student</Button>} />
         </Card>
       ) : (
         <>
@@ -418,7 +471,10 @@ export default function Students() {
                 </thead>
                 <tbody>
                   {list.map((s) => (
-                    <tr key={s._id} className="cursor-pointer" onClick={() => nav(`/app/students/${s._id}`)}>
+                    <tr key={s._id} className="cursor-pointer focus:bg-brand-50/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-400"
+                      tabIndex={0} role="link" aria-label={`Open ${s.name}`}
+                      onClick={() => nav(`/app/students/${s._id}`)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nav(`/app/students/${s._id}`); } }}>
                       <td>
                         <div className="flex items-center gap-3">
                           <Avatar name={s.name} size="sm" />
@@ -446,6 +502,7 @@ export default function Students() {
                 </tbody>
               </table>
             </div>
+            {pager && <Pager {...pager} noun="students" />}
           </Card>
 
           {/* Mobile cards */}
@@ -484,6 +541,7 @@ export default function Students() {
               </button>
             ))}
           </div>
+          {pager && <Card pad={false} className="mt-3 overflow-hidden md:hidden"><Pager {...pager} noun="students" /></Card>}
         </>
       )}
 
