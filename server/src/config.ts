@@ -21,13 +21,21 @@ if (isProd && !mongoUri) {
 }
 
 const DEV_SECRET = 'coachflow-dev-secret-change-me';
-const envSecret = process.env.JWT_SECRET || '';
+// Trim and drop surrounding quotes — a common copy-paste slip in hosting dashboards.
+const envSecret = (process.env.JWT_SECRET || '').trim().replace(/^["']|["']$/g, '');
 const strongSecret = envSecret.length >= 32 && !envSecret.startsWith('change-this');
-if (!strongSecret && !localDemo) {
-  throw new Error('JWT_SECRET must be set to a long random string (32+ characters) in server/.env. It is only optional in local demo mode (no MONGO_URI).');
+if (envSecret && !strongSecret) {
+  console.warn(`⚠  JWT_SECRET is set but too weak (${envSecret.length} characters, need 32+) — it is ignored.`);
 }
-if (!strongSecret) console.warn('⚠  Using the built-in development JWT secret (local demo mode). Set JWT_SECRET before going live.');
-const jwtSecret = strongSecret ? envSecret : DEV_SECRET;
+/**
+ * The key that signs login tokens:
+ *  - JWT_SECRET from the environment when it is strong (recommended), else
+ *  - local demo mode: a fixed development key, else
+ *  - a random key generated once and stored in the database (see ensureJwtSecret in db.ts),
+ *    so a live server still starts safely and logins survive restarts.
+ */
+const jwtSecret = strongSecret ? envSecret : localDemo ? DEV_SECRET : '';
+if (!strongSecret && localDemo) console.warn('⚠  Using the built-in development JWT secret (local demo mode). Set JWT_SECRET before going live.');
 
 const flag = (name: string, fallback: boolean) => (process.env[name] ? process.env[name] === 'true' : fallback);
 

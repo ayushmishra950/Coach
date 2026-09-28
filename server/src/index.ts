@@ -6,7 +6,7 @@ import express from 'express';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { connectDB } from './db.js';
+import { connectDB, ensureJwtSecret } from './db.js';
 import { User } from './models/index.js';
 import admin from './routes/admin.js';
 import announcements from './routes/announcements.js';
@@ -78,6 +78,7 @@ app.use(errorHandler);
 
 async function main() {
   await connectDB();
+  await ensureJwtSecret();
   await ensurePlans();
   if (config.demoPayments) console.warn('⚠  Demo payments are ON (local demo mode): fees and plans can be "paid" without a gateway.');
   if (config.seedOnEmpty && !(await User.exists({}))) {
