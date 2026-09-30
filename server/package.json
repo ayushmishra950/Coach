@@ -8,6 +8,8 @@
     "build": "tsc",
     "start": "NODE_ENV=production node dist/index.js",
     "seed": "tsx src/seed.ts --force",
+    "clean-data": "tsx src/cleanData.ts --yes",
+    "clean-data:preview": "tsx src/cleanData.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

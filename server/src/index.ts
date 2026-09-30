@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { connectDB, ensureJwtSecret } from './db.js';
-import { User } from './models/index.js';
+import { Institute, User } from './models/index.js';
 import admin from './routes/admin.js';
 import announcements from './routes/announcements.js';
 import attendance from './routes/attendance.js';
@@ -99,10 +99,10 @@ const envVal = (k: string) => (process.env[k] ?? '').trim().replace(/^["']|["']$
 /**
  * Makes the logins given in the environment actually work, on every start:
  *   SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD / SUPERADMIN_NAME
- *   OWNER_EMAIL / OWNER_PASSWORD / OWNER_NAME   (owner of the demo institute)
+ *   OWNER_EMAIL / OWNER_PASSWORD / OWNER_NAME / INSTITUTE_NAME
  * If the account exists its password is set to the configured one. If it doesn't, the demo
- * account (admin@coachflow.in / owner@coachflow.in) is renamed to it, or a Super Admin is
- * created. Remove these variables once you have changed the passwords from "My account",
+ * account (admin@coachflow.in / owner@coachflow.in) is renamed to it, or — on a fresh
+ * database — a new Super Admin, or a new owner with their own institute, is created. Remove these variables once you have changed the passwords from "My account",
  * otherwise a restart puts the configured password back.
  */
 async function syncConfiguredAccounts() {
@@ -119,7 +119,20 @@ async function syncConfiguredAccounts() {
       // Take over the demo account (keeps the demo institute and all its data).
       user = await User.findOne({ email: demoEmail, role }).select('+password');
       if (!user && role === 'owner') {
-        return console.warn(`⚠  No owner account ${email} (or ${demoEmail}) found — set OWNER_* before the demo data is created, or create the institute by registering.`);
+        // Fresh database: create the owner together with their institute (same as signing up).
+        const ownerName = name || 'Institute Owner';
+        const instituteName = envVal('INSTITUTE_NAME') || 'My Institute';
+        const institute = await Institute.create({
+          name: instituteName,
+          ownerName,
+          email,
+          logoText: instituteName.slice(0, 2).toUpperCase(),
+          plan: 'premium',
+          status: 'trial',
+          trialEndsAt: new Date(Date.now() + 30 * 86400000),
+        });
+        await User.create({ name: ownerName, email, password: await bcrypt.hash(password, 10), role, instituteId: institute._id });
+        return console.log(`✓ Owner created: ${email} (institute "${instituteName}")`);
       }
       if (!user) {
         await User.create({ name: name || 'CoachFlow Admin', email, password: await bcrypt.hash(password, 10), role });

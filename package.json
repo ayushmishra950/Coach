@@ -7,7 +7,9 @@
     "install:all": "npm install && npm install --prefix server && npm install --prefix client",
     "dev": "concurrently -n api,web -c magenta,cyan \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
     "build": "npm run build --prefix server && npm run build --prefix client",
-    "seed": "npm run seed --prefix server"
+    "seed": "npm run seed --prefix server",
+    "clean-data": "npm run clean-data --prefix server",
+    "clean-data:preview": "npm run clean-data:preview --prefix server"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
