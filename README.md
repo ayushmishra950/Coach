@@ -76,7 +76,7 @@ The Login page also has one-click demo buttons. To reset the demo data, run `npm
 | `CLIENT_URL` | `http://localhost:5173` | Allowed web origin(s), comma-separated. Also used by the chat socket. |
 | `APP_TIMEZONE` | `Asia/Kolkata` | All "today", due-date, attendance and monthly-report logic runs in this zone, whatever the server's own zone is. |
 | `DEMO_PAYMENTS` | on in dev, off in prod | Demo checkout / Pay Now. Keep off on a live site until Razorpay is connected. |
-| `TRUST_PROXY` | `false` | Set `true` behind Nginx / a load balancer so rate limits see real client IPs. |
+| `TRUST_PROXY` | `0` | Number of proxy hops in front of the API (`true` = 1). Set it behind Nginx / a load balancer / Cloudflare (Cloudflare + Nginx = 2) so rate limits see real client IPs. |
 | `BILLING_GRACE_DAYS` | `3` | Days a paid plan keeps working after its period ends before falling back to Starter. |
 
 ## Billing rules

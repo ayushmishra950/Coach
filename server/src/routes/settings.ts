@@ -4,7 +4,7 @@ import { Announcement, Attendance, Batch, Invoice, Payment, Student, Test, User 
 import { audit } from '../services/audit.js';
 import { hasFeature } from '../services/plan.js';
 import { HttpError, ah } from '../utils/http.js';
-import { EMAIL_RX, HEX_COLOR_RX, PHONE_RX, cleanName, optStr, rateLimit } from '../utils/security.js';
+import { isEmail, HEX_COLOR_RX, PHONE_RX, cleanName, optStr, rateLimit } from '../utils/security.js';
 
 const r = Router();
 r.use(auth, allow('owner'));
@@ -37,7 +37,7 @@ r.put(
     }
     if (b.email !== undefined) {
       const v = optStr(b.email, 120)?.toLowerCase();
-      if (v && !EMAIL_RX.test(v)) throw new HttpError(400, 'Enter a valid email address');
+      if (v && !isEmail(v)) throw new HttpError(400, 'Enter a valid email address');
       inst.set('email', v);
       changed.push('email');
     }

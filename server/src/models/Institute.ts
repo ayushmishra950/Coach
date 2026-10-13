@@ -31,7 +31,7 @@ const instituteSchema = new Schema(
       channels: {
         inApp: { type: Boolean, default: true },
         whatsapp: { type: Boolean, default: false },
-        email: { type: Boolean, default: true },
+        email: { type: Boolean, default: false },
         sms: { type: Boolean, default: false },
       },
       reminders: {

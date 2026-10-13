@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { Toaster } from 'react-hot-toast';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthProvider } from './context/AuthContext';
 import { RealtimeProvider } from './context/RealtimeContext';
 import './index.css';
@@ -12,7 +13,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <AuthProvider>
         <RealtimeProvider>
-          <App />
+          <ErrorBoundary>
+            <App />
+          </ErrorBoundary>
         </RealtimeProvider>
         <Toaster position="top-right" toastOptions={{ style: { borderRadius: '14px', fontSize: '14px', fontWeight: 500 }, success: { iconTheme: { primary: '#4f46e5', secondary: '#fff' } } }} />
       </AuthProvider>

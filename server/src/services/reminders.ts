@@ -44,9 +44,9 @@ export async function runReminders(institute: InstituteDoc) {
     let kind: 'before' | 'today' | 'after' | null = null;
     if (daysToDue > 0 && daysToDue <= (rules?.daysBefore ?? 3) && !last) kind = 'before';
     else if (daysToDue === 0 && rules?.onDueDate !== false) kind = 'today';
-    else if (daysToDue < 0 && -daysToDue >= (rules?.daysAfter ?? 3)) {
+    else if (daysToDue < 0 && -daysToDue >= Math.max(1, rules?.daysAfter ?? 3)) {
       const gap = last ? (today.getTime() - last.getTime()) / 86400000 : Infinity;
-      if (gap >= (rules?.daysAfter ?? 3)) kind = 'after';
+      if (gap >= Math.max(1, rules?.daysAfter ?? 3)) kind = 'after';
     }
     if (!kind) continue;
 
@@ -131,6 +131,8 @@ export function startReminderScheduler() {
       }
     };
     await Promise.all(Array.from({ length: 4 }, worker));
+    // Round finished: free the lock so a restart right after a deploy can still run the next round.
+    await Lock.updateOne({ key: 'fee-reminders' }, { $set: { until: new Date(Date.now() + 20 * 60 * 1000) } }).catch(() => undefined);
   };
   setTimeout(() => tick().catch(console.error), 15_000);
   setInterval(() => tick().catch(console.error), 6 * 60 * 60 * 1000);

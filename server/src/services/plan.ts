@@ -1,3 +1,4 @@
+import { addMonthsClamped } from '../utils/dates.js';
 import { config } from '../config.js';
 import { DEFAULT_PLANS, Institute, Plan, type FeatureKey, type InstituteDoc, type PlanT } from '../models/index.js';
 
@@ -39,7 +40,7 @@ export function periodLapsed(inst: Pick<InstituteDoc, 'currentPeriodEnd'>) {
  *  - a paid (or past-due) plan whose period ended beyond the grace window falls back to Starter
  */
 export function effectivePlanKey(inst: BillingFields) {
-  if (inst.status === 'trial' && inst.trialEndsAt && inst.trialEndsAt < new Date()) return 'starter';
+  if (inst.status === 'trial' && (!inst.trialEndsAt || inst.trialEndsAt < new Date())) return 'starter';
   if (inst.status === 'cancelled' || inst.status === 'suspended') return 'starter';
   if ((inst.status === 'active' || inst.status === 'past_due') && periodLapsed(inst)) return 'starter';
   // Cancelled by the owner: paid features last until the end of the period already paid for.
@@ -87,6 +88,5 @@ export function monthlyValue(plan: { priceMonthly: number; priceYearly: number }
 /** End of a new billing period, extending from the current end when renewing early. */
 export function nextPeriodEnd(currentEnd: Date | null | undefined, cycle: 'monthly' | 'yearly') {
   const base = currentEnd && currentEnd > new Date() ? new Date(currentEnd) : new Date();
-  base.setMonth(base.getMonth() + (cycle === 'yearly' ? 12 : 1));
-  return base;
+  return addMonthsClamped(base, cycle === 'yearly' ? 12 : 1); // Jan 31 + 1 month = Feb 28, not Mar 3
 }

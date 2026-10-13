@@ -195,7 +195,13 @@ r.put(
       inv.amount = amount;
       inv.status = inv.paidAmount >= amount ? 'paid' : inv.paidAmount > 0 ? 'partial' : 'pending';
     }
-    await inv.save();
+    // Guarded write: if a payment landed since we read the invoice, paidAmount no longer matches
+    // and nothing is saved (otherwise amount/status could go out of sync with the payment).
+    const written = await Invoice.updateOne(
+      { _id: inv._id, instituteId: inv.instituteId, paidAmount: inv.paidAmount },
+      { $set: { title: inv.title, dueDate: inv.dueDate, amount: inv.amount, status: inv.status } },
+    );
+    if (!written.matchedCount) throw new HttpError(409, 'A payment was just recorded on this invoice. Reload and try again.');
     bumpData(inv.instituteId);
     if (changes.length) audit(req, 'invoice.edit', 'Invoice', inv._id, changes.join('; '));
     res.json(inv);

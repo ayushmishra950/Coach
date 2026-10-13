@@ -11,7 +11,7 @@ import { attendanceByStudent, feesByStudent, scoresByStudent } from '../services
 import { bumpData } from '../utils/cache.js';
 import { HttpError, ah, oid, required, str } from '../utils/http.js';
 import { pageParams, paged } from '../utils/paginate.js';
-import { EMAIL_RX, PHONE_RX, cleanName, escapeRegex, generatePassword, optStr } from '../utils/security.js';
+import { isEmail, PHONE_RX, cleanName, escapeRegex, generatePassword, optStr } from '../utils/security.js';
 import { addDays, addMonthsClamped, parseDate, ymd } from '../utils/dates.js';
 
 const r = Router();
@@ -60,7 +60,7 @@ function pick(body: Record<string, unknown>, { strict = true } = {}) {
           unset[k] = 1;
           break;
         }
-        if (!EMAIL_RX.test(v)) {
+        if (!isEmail(v)) {
           if (strict) throw new HttpError(400, 'Enter a valid parent email address');
           continue;
         }
@@ -520,7 +520,7 @@ r.post(
     if (!student) throw new HttpError(404, 'Student not found');
     const email = String(req.body?.email || student.parentEmail || '').toLowerCase().trim();
     if (!email) throw new HttpError(400, "Add the parent's email address first");
-    if (!EMAIL_RX.test(email)) throw new HttpError(400, 'Enter a valid parent email address');
+    if (!isEmail(email)) throw new HttpError(400, 'Enter a valid parent email address');
 
     let parent = await User.findOne({ email });
     if (parent && (parent.role !== 'parent' || String(parent.instituteId) !== String(instituteId))) {

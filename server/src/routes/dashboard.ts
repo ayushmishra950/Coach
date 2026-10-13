@@ -45,12 +45,47 @@ async function todaysClasses(instituteId: Types.ObjectId, batchIds: Types.Object
 
 /** Tests whose date has passed but marks aren't entered: the newest few plus the total count. */
 async function testsNeedingMarks(instituteId: Types.ObjectId, batchIds: Types.ObjectId[] | null) {
-  const q = { instituteId, status: 'scheduled', date: { $lte: new Date() }, ...(batchIds ? { batchId: { $in: batchIds } } : {}) };
+  const q = { instituteId, status: 'scheduled', date: { $lt: startOfDay() }, ...(batchIds ? { batchId: { $in: batchIds } } : {}) };
   const [items, total] = await Promise.all([
     Test.find(q).select('-results').populate('batchId', 'name').sort({ date: -1, _id: -1 }).limit(8).lean(),
     Test.countDocuments(q),
   ]);
   return { items: items.filter((t) => t.batchId), total };
+}
+
+
+type Digest = {
+  absentAlerts: (Awaited<ReturnType<typeof absenceStreaks>>[number] & { student: unknown })[];
+  trend: { date: string; pct: number | null }[];
+  todayAttendance: { present: number; total: number };
+};
+const digestMemo = instituteMemo<Digest>(5 * 60_000);
+
+async function attendanceDigest(instituteId: Types.ObjectId, threshold: number, batchIds: Types.ObjectId[] | null): Promise<Digest> {
+  const since = ymd(addDays(new Date(), -13));
+  const [streaks, perDay] = await Promise.all([
+    absenceStreaks(instituteId, threshold, batchIds),
+    // Counted inside MongoDB per day — no need to ship every attendance record to Node.
+    Attendance.aggregate<{ _id: string; total: number; present: number }>([
+      { $match: { instituteId, date: { $gte: since }, ...(batchIds ? { batchId: { $in: batchIds } } : {}) } },
+      { $project: { date: 1, n: { $size: '$records' }, p: { $size: { $filter: { input: '$records', cond: { $ne: ['$$this.status', 'absent'] } } } } } },
+      { $group: { _id: '$date', total: { $sum: '$n' }, present: { $sum: '$p' } } },
+    ]),
+  ]);
+  const streakStudents = await Student.find({ instituteId, _id: { $in: streaks.map((s) => new Types.ObjectId(s.studentId)) }, status: 'active' })
+    .select('name studentCode parentPhone')
+    .lean();
+  const byId = new Map(streakStudents.map((x) => [String(x._id), x]));
+  const absentAlerts = streaks.map((s) => ({ ...s, student: byId.get(s.studentId) })).filter((s) => s.student);
+  const day = new Map(perDay.map((d) => [d._id, d]));
+  const trend: Digest['trend'] = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = ymd(addDays(new Date(), -i));
+    const x = day.get(d);
+    trend.push({ date: d, pct: x?.total ? pct(x.present, x.total) : null });
+  }
+  const t = day.get(ymd());
+  return { absentAlerts, trend, todayAttendance: { present: t?.present ?? 0, total: t?.total ?? 0 } };
 }
 
 // Owner money figures: recomputed when a payment / invoice changes, or after a minute.
@@ -63,31 +98,13 @@ r.get(
     const batchIds = await scopedBatchIds(req);
     const threshold = req.institute?.settings?.absentAlertAfter ?? 3;
 
-    const [classes, pendingTests, streaks] = await Promise.all([
+    const [classes, pendingTests, digest] = await Promise.all([
       todaysClasses(instituteId, batchIds),
       testsNeedingMarks(instituteId, batchIds),
-      absenceStreaks(instituteId, threshold, batchIds),
+      // Streaks + 14-day trend only change when attendance is saved (bumpData), so reuse them.
+      digestMemo(instituteId, `${ymd()}|${threshold}|${batchIds ? batchIds.map(String).sort().join(',') : 'all'}`, () => attendanceDigest(instituteId, threshold, batchIds)),
     ]);
-    const streakStudents = await Student.find({ instituteId, _id: { $in: streaks.map((s) => new Types.ObjectId(s.studentId)) }, status: 'active' })
-      .select('name studentCode parentPhone')
-      .lean();
-    const absentAlerts = streaks
-      .map((s) => ({ ...s, student: streakStudents.find((x) => String(x._id) === s.studentId) }))
-      .filter((s) => s.student);
-
-    // Attendance trend (last 14 days)
-    const since = ymd(addDays(new Date(), -13));
-    const att = await Attendance.find({ instituteId, date: { $gte: since }, ...(batchIds ? { batchId: { $in: batchIds } } : {}) })
-      .select('date records.status')
-      .lean();
-    const trend: { date: string; pct: number | null }[] = [];
-    for (let i = 13; i >= 0; i--) {
-      const d = ymd(addDays(new Date(), -i));
-      const recs = att.filter((a) => a.date === d).flatMap((a) => a.records);
-      trend.push({ date: d, pct: recs.length ? pct(recs.filter((x) => x.status !== 'absent').length, recs.length) : null });
-    }
-    const todayRecs = att.filter((a) => a.date === ymd()).flatMap((a) => a.records);
-    const todayAttendance = { present: todayRecs.filter((x) => x.status !== 'absent').length, total: todayRecs.length };
+    const { absentAlerts, trend, todayAttendance } = digest;
 
     if (req.user.role === 'teacher') {
       const myStudents = await Student.countDocuments({ instituteId, status: 'active', batchIds: { $in: batchIds } });

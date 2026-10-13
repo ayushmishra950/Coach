@@ -8,9 +8,15 @@ import { disconnectUser } from '../services/realtime.js';
 import { parseDate } from '../utils/dates.js';
 import { HttpError, ah, oid, required } from '../utils/http.js';
 import { pageParams, paged } from '../utils/paginate.js';
-import { EMAIL_RX, PHONE_RX, assertPassword, cleanName, escapeRegex, generatePassword, optStr } from '../utils/security.js';
+import { isEmail, PHONE_RX, assertPassword, cleanName, escapeRegex, generatePassword, optStr } from '../utils/security.js';
 
 const r = Router();
+
+/** A user document without the password hash / token version, safe to send to the browser. */
+function safeUser(u: { toObject: () => Record<string, unknown> }) {
+  const { password: _p, tokenVersion: _t, ...rest } = u.toObject();
+  return rest;
+}
 r.use(auth, allow('owner'));
 
 /** Validated teacher profile fields from a request body ({ set, unset }). */
@@ -131,7 +137,7 @@ r.post(
     const instituteId = tid(req);
     required(req.body ?? {}, ['name', 'email']);
     const email = String(req.body.email).toLowerCase().trim();
-    if (!EMAIL_RX.test(email)) throw new HttpError(400, 'Enter a valid email address');
+    if (!isEmail(email)) throw new HttpError(400, 'Enter a valid email address');
     const { set } = teacherFields(req.body);
     const password = req.body.password ? assertPassword(req.body.password) : generatePassword();
     await assertTeacherSeat(req);
@@ -143,13 +149,13 @@ r.post(
         existing.set({ ...set, active: true, password: await bcrypt.hash(password, 10), tokenVersion: (existing.tokenVersion ?? 0) + 1 });
         await existing.save();
         audit(req, 'teacher.reactivate', 'User', existing._id, existing.name);
-        return res.status(201).json({ teacher: existing, credentials: { email, password }, reactivated: true });
+        return res.status(201).json({ teacher: safeUser(existing), credentials: { email, password }, reactivated: true });
       }
       throw new HttpError(409, existing.role === 'teacher' && String(existing.instituteId) === String(instituteId) ? 'This teacher is already on your staff' : 'This email is already used by another account');
     }
     const teacher = await User.create({ ...set, email, password: await bcrypt.hash(password, 10), role: 'teacher', instituteId });
     audit(req, 'teacher.create', 'User', teacher._id, `${teacher.name} <${email}>`);
-    res.status(201).json({ teacher, credentials: { email: teacher.email, password } });
+    res.status(201).json({ teacher: safeUser(teacher), credentials: { email: teacher.email, password } });
   }),
 );
 
@@ -163,7 +169,7 @@ r.put(
 
     if (req.body?.email !== undefined) {
       const email = String(req.body.email).toLowerCase().trim();
-      if (!EMAIL_RX.test(email)) throw new HttpError(400, 'Enter a valid email address');
+      if (!isEmail(email)) throw new HttpError(400, 'Enter a valid email address');
       if (email !== t.email) {
         if (await User.exists({ email, _id: { $ne: t._id } })) throw new HttpError(409, 'This email is already used by another account');
         set.email = email;

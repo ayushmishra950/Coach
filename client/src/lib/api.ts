@@ -12,12 +12,19 @@ api.interceptors.request.use((cfg) => {
   return cfg;
 });
 
+/** GET responses kept for instant re-display (see useApi). Emptied after any successful write. */
+export const apiCache = new Map<string, { at: number; v: unknown }>();
+
 api.interceptors.response.use(
-  (r) => r,
+  (r) => {
+    if (r.config.method && r.config.method !== 'get') apiCache.clear();
+    return r;
+  },
   (err: AxiosError<{ message?: string; code?: string; feature?: string }>) => {
     if (err.response?.status === 401 && localStorage.getItem(TOKEN_KEY)) {
       localStorage.removeItem(TOKEN_KEY);
-      if (!location.pathname.startsWith('/login')) location.href = '/login';
+      // Only private areas bounce to login; public pages (home, register, terms) just stay put.
+      if (/^\/(app|admin|portal)/.test(location.pathname)) location.href = '/login';
     }
     // The institute was suspended by CoachFlow: sign out everywhere and explain why on the login page.
     if (err.response?.data?.code === 'INSTITUTE_SUSPENDED' && localStorage.getItem(TOKEN_KEY)) {

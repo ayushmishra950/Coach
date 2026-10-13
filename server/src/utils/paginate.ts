@@ -15,7 +15,7 @@ export interface PageParams {
 }
 
 export function pageParams(query: Record<string, unknown>): PageParams {
-  const page = Math.max(1, Math.floor(Number(query.page)) || 1);
+  const page = Math.min(100000, Math.max(1, Math.floor(Number(query.page)) || 1));
   const limit = Math.max(1, Math.min(PAGE_SIZE, Math.floor(Number(query.limit)) || PAGE_SIZE));
   return { page, limit, skip: (page - 1) * limit };
 }

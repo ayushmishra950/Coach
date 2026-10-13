@@ -25,6 +25,10 @@ const phone = () => '9' + String(between(100000000, 999999999));
  * environment (never in code) — otherwise the public demo logins are used.
  */
 function seedAccounts() {
+  const live = !!process.env.MONGO_URI || process.env.NODE_ENV === 'production';
+  if (live && (!(process.env.SUPERADMIN_PASSWORD ?? '').trim() || !(process.env.OWNER_PASSWORD ?? '').trim())) {
+    throw new Error('Refusing to seed a real database with the public demo passwords. Set SUPERADMIN_PASSWORD and OWNER_PASSWORD first.');
+  }
   const env = (k: string) => (process.env[k] ?? '').trim().replace(/^["']|["']$/g, '');
   return {
     admin: {
@@ -370,6 +374,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { connectDB } = await import('./db.js');
   await connectDB();
   if (process.argv.includes('--force')) {
+    if ((process.env.MONGO_URI ?? '').trim() || process.env.NODE_ENV === 'production') {
+      if (process.env.ALLOW_DESTRUCTIVE !== 'I_UNDERSTAND') {
+        console.error('✗ Refusing to WIPE a real database. This deletes every collection of MONGO_URI.\n  If you really mean it, run with ALLOW_DESTRUCTIVE=I_UNDERSTAND.');
+        process.exit(1);
+      }
+    }
     const db = mongoose.connection.db!;
     for (const c of await db.collections()) await c.deleteMany({});
   }

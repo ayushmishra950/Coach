@@ -1,28 +1,57 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, errMsg } from '../lib/api';
+import { TOKEN_KEY, api, apiCache as cache, errMsg } from '../lib/api';
 import { PAGE_SIZE, type Paged } from '../lib/types';
 
 /**
  * GET helper: `const { data, loading, error, reload } = useApi<T>('/students', { search })`.
  * Pass `null` as the url to skip fetching.
  */
+// Stale-while-revalidate: a page you already opened shows its last data instantly while the
+// fresh copy loads in the background. Keyed by login token, so users never see each other's data.
+const CACHE_TTL = 5 * 60_000;
+const CACHE_MAX = 150;
+const cacheKeyOf = (url: string, params: string) => {
+  let token = '';
+  try {
+    token = localStorage.getItem(TOKEN_KEY)?.slice(-24) ?? '';
+  } catch {
+    /* storage unavailable: no cache sharing risk, just a shared empty token */
+  }
+  return `${token}|${url}|${params}`;
+};
+
 export function useApi<T>(url: string | null, params?: Record<string, unknown>) {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(!!url);
+  const key = JSON.stringify(params ?? {});
+  const ck = url ? cacheKeyOf(url, key) : null;
+  const fresh = ck ? cache.get(ck) : undefined;
+  const hit = fresh && Date.now() - fresh.at < CACHE_TTL ? (fresh.v as T) : null;
+  const [data, setData] = useState<T | null>(hit);
+  const [loading, setLoading] = useState(!!url && !hit);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<number | null>(null);
-  const key = JSON.stringify(params ?? {});
   const seq = useRef(0);
+  const shown = useRef<string | null>(hit ? ck : null); // the cache entry currently on screen
 
   const load = useCallback(async () => {
     if (!url) return;
     const id = ++seq.current;
-    setLoading(true);
+    const k = cacheKeyOf(url, key);
+    const cached = cache.get(k);
+    if (cached && Date.now() - cached.at < CACHE_TTL) {
+      if (shown.current !== k) {
+        setData(cached.v as T);
+        shown.current = k;
+      }
+      setLoading(false); // show the old data now, refresh quietly
+    } else setLoading(true);
     setError(null);
     try {
       const res = await api.get<T>(url, { params: JSON.parse(key) });
+      if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value as string);
+      cache.set(k, { at: Date.now(), v: res.data });
       if (id === seq.current) {
         setData(res.data);
+        shown.current = k;
         setStatus(res.status);
       }
     } catch (e) {

@@ -267,7 +267,7 @@ function MarkSheet({ batchId, date, onBack, onSaved }: { batchId: string; date: 
         records: data.students.map((s) => ({ studentId: s._id, status: marks[s._id] ?? 'present' })),
       });
       const n = res.data.notified ?? 0;
-      toast.success(n > 0 ? `Attendance saved — absence alerts sent to ${n} parent${n === 1 ? '' : 's'}` : 'Attendance saved');
+      toast.success(n > 0 ? `Attendance saved — absence alert posted in the parent portal for ${n} parent${n === 1 ? '' : 's'}` : 'Attendance saved');
       onSaved();
       reload();
     } catch (e) {

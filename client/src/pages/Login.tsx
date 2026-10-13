@@ -21,7 +21,7 @@ function BrandPanel() {
       <div className="relative"><Logo light /></div>
       <div className="relative max-w-md">
         <p className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold ring-1 ring-white/20">
-          <Sparkles className="h-3.5 w-3.5 text-amber-300" /> Trusted by coaching institutes across India
+          <Sparkles className="h-3.5 w-3.5 text-amber-300" /> Built for coaching institutes in India
         </p>
         <h2 className="mt-5 text-4xl font-extrabold leading-tight tracking-tight">
           Your Coaching Institute.<br />
@@ -39,10 +39,7 @@ function BrandPanel() {
           ))}
         </ul>
       </div>
-      <div className="relative rounded-2xl bg-white/10 p-5 ring-1 ring-white/15 backdrop-blur">
-        <p className="text-sm leading-relaxed text-white/90">“Earlier I spent every Sunday chasing fees on WhatsApp. Now reminders go out on their own and I just check the dashboard.”</p>
-        <p className="mt-3 text-xs font-semibold text-white/60">— Institute owner, Jaipur (illustrative)</p>
-      </div>
+      <div />
     </div>
   );
 }

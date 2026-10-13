@@ -335,7 +335,7 @@ function InstallmentsTab({ bump, summary, onCollect }: { bump: number; summary: 
     setReminding(inv._id);
     try {
       await api.post(`/fees/invoices/${inv._id}/remind`);
-      toast.success(`Reminder sent to ${studentOf(inv)?.name ?? 'parent'}'s parent`);
+      toast.success(`In-app reminder sent to ${studentOf(inv)?.name ?? 'the'} family's parent portal`);
       reload();
     } catch (e) {
       toast.error(errMsg(e));

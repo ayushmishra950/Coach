@@ -5,6 +5,7 @@ import cors from 'cors';
 import express from 'express';
 import fs from 'node:fs';
 import http from 'node:http';
+import mongoose from 'mongoose';
 import path from 'node:path';
 import { connectDB, ensureJwtSecret } from './db.js';
 import { Institute, User } from './models/index.js';
@@ -31,15 +32,19 @@ import { ensurePlans } from './services/plan.js';
 import { initRealtime } from './services/realtime.js';
 import { startReminderScheduler } from './services/reminders.js';
 import { errorHandler } from './utils/http.js';
-import { compressJson, flatQueryParser, securityHeaders } from './utils/security.js';
+import { compressJson, flatQueryParser, rateLimit, securityHeaders, staticGzip } from './utils/security.js';
 
 const app = express();
 app.disable('x-powered-by');
 app.set('query parser', flatQueryParser);
-if (config.trustProxy) app.set('trust proxy', 1);
+if (config.trustProxy) app.set('trust proxy', config.trustProxy);
 app.use(securityHeaders);
-app.use(cors({ origin: config.clientUrl.split(','), credentials: true }));
-app.use(express.json({ limit: '2mb' }));
+app.use(cors({ origin: config.clientOrigins, credentials: true }));
+// Only the CSV import needs a big body; everything else is capped small (login/register are public).
+app.use('/api/students/import', express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '100kb' }));
+// Broad safety net per client IP (login/register/chat have tighter limits of their own).
+app.use('/api', rateLimit({ windowMs: 60_000, max: 600, message: 'Too many requests. Please slow down and try again shortly.' }));
 app.use('/api', compressJson);
 
 app.use('/api/public', publicRoutes);
@@ -65,6 +70,7 @@ app.use('/api', (_req, res) => res.status(404).json({ message: 'Not found' }));
 // Serve the built React app in production
 const clientDist = path.resolve(process.cwd(), '../client/dist');
 if (fs.existsSync(clientDist)) {
+  app.use(staticGzip(clientDist));
   // Hashed build files never change → cache for a year; index.html is always re-checked.
   app.use('/assets', express.static(path.join(clientDist, 'assets'), { maxAge: '1y', immutable: true, index: false }));
   app.use(express.static(clientDist, { index: false, maxAge: '1h' }));
@@ -89,8 +95,24 @@ async function main() {
   await syncConfiguredAccounts().catch((e) => console.error('[accounts]', e?.message));
   startReminderScheduler();
   const server = http.createServer(app);
-  initRealtime(server);
+  const io = initRealtime(server);
   server.listen(config.port, () => console.log(`🚀 CoachFlow API running on http://localhost:${config.port} (time zone ${config.timezone})`));
+
+  // Graceful shutdown: stop taking requests, let in-flight ones finish, close sockets and the DB.
+  let closing = false;
+  const shutdown = (signal: string) => {
+    if (closing) return;
+    closing = true;
+    console.log(`${signal} received — shutting down…`);
+    setTimeout(() => process.exit(1), 10_000).unref();
+    server.close(async () => {
+      await mongoose.disconnect().catch(() => undefined);
+      process.exit(0);
+    });
+    io?.close?.();
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  if (config.isProd) process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
 /** Env value, trimmed, with accidental surrounding quotes removed. */
@@ -161,6 +183,12 @@ async function syncConfiguredAccounts() {
   await sync('superadmin', 'SUPERADMIN', 'admin@coachflow.in');
   await sync('owner', 'OWNER', 'owner@coachflow.in');
 }
+
+process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));
+process.on('uncaughtException', (e) => {
+  console.error('[uncaughtException]', e);
+  process.exit(1);
+});
 
 main().catch((e) => {
   console.error(e);

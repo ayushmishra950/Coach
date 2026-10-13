@@ -27,6 +27,10 @@ import { connectDB } from './db.js';
 
 const KEEP = new Set(['users', 'plans', 'appsecrets']);
 const apply = process.argv.includes('--yes');
+if (apply && config.mongoUri && !process.argv.includes('--live')) {
+  console.error('✗ MONGO_URI points at a real database. This permanently deletes students, fees, payments and attendance.\n  Run the preview first, and if you are sure add --live:  npx tsx src/cleanData.ts --yes --live');
+  process.exit(1);
+}
 
 async function main() {
   await connectDB();

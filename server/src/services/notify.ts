@@ -34,7 +34,7 @@ const adapters: Record<Channel, ChannelAdapter> = {
     send: async ({ to, title }) => {
       if (!to) return { status: 'skipped', info: 'No phone number' };
       devLog('whatsapp', to, title);
-      return { status: 'queued', info: 'Not connected yet — add a WhatsApp Business provider in services/notify.ts' };
+      return { status: 'queued', info: 'Not connected yet' };
     },
   },
   email: {

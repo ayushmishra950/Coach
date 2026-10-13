@@ -91,7 +91,7 @@ export default function Register() {
             <Button type="submit" variant="premium" className="py-3 sm:col-span-2" loading={busy}>
               Start my free trial <ArrowRight className="h-4 w-4" />
             </Button>
-            <p className="text-center text-xs text-slate-400 sm:col-span-2">By signing up you agree to our Terms and Privacy Policy.</p>
+            <p className="text-center text-xs text-slate-400 sm:col-span-2">By signing up you agree to our <Link to="/terms" className="font-semibold text-brand-600 hover:underline">Terms</Link> and <Link to="/privacy" className="font-semibold text-brand-600 hover:underline">Privacy Policy</Link>.</p>
           </form>
         </div>
         <p className="text-center text-xs text-slate-400">© {new Date().getFullYear()} CoachFlow · <Link to="/" className="hover:text-slate-600">Back to home</Link></p>

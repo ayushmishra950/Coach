@@ -66,7 +66,8 @@ r.post(
     const previous = await Attendance.findOne({ instituteId, batchId: batch._id, date }).lean();
     const doc = await Attendance.findOneAndUpdate(
       { instituteId, batchId: batch._id, date },
-      { records: clean, markedBy: req.user.id },
+      // Keep marks of students who have since left the batch, so old attendance % never changes.
+      { records: [...clean, ...(previous?.records ?? []).filter((x) => !seen.has(String(x.studentId)) && !validIds.has(String(x.studentId)))], markedBy: req.user.id },
       { upsert: true, new: true },
     );
     bumpData(instituteId);
@@ -189,7 +190,7 @@ r.get(
   ah(async (req, res) => {
     const instituteId = tid(req);
     const scoped = await scopedBatchIds(req);
-    const threshold = Number(req.query.threshold) || req.institute?.settings?.absentAlertAfter || 3;
+    const threshold = Math.min(30, Math.max(1, Math.floor(Number(req.query.threshold)) || req.institute?.settings?.absentAlertAfter || 3));
     const streaks = await streakMemo(instituteId, `${ymd()}|${threshold}|${scoped ? scoped.map(String).sort().join(',') : 'all'}`, () =>
       absenceStreaks(instituteId, threshold, scoped),
     );

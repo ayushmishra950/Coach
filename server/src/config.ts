@@ -39,9 +39,14 @@ if (!strongSecret && localDemo) console.warn('⚠  Using the built-in developmen
 
 const flag = (name: string, fallback: boolean) => (process.env[name] ? process.env[name] === 'true' : fallback);
 
-if (isProd && process.env.TRUST_PROXY !== 'true' && process.env.TRUST_PROXY !== 'false') {
-  console.warn('⚠  TRUST_PROXY is not set. If the API runs behind Nginx or a load balancer, set TRUST_PROXY=true so login limits see real client IPs.');
+if (isProd && !process.env.TRUST_PROXY) {
+  console.warn('⚠  TRUST_PROXY is not set. Behind Nginx / a load balancer / Cloudflare set it to the number of proxy hops (1, 2, …) or "true" (= 1), otherwise every visitor shares one IP and rate limits misfire.');
 }
+if (isProd && flag('SEED_ON_EMPTY', false)) {
+  throw new Error('SEED_ON_EMPTY=true loads public demo passwords and is not allowed in production. Remove it.');
+}
+/** Express "trust proxy" setting: number of proxy hops (0 = off). TRUST_PROXY=true means 1. */
+const trustHops = process.env.TRUST_PROXY === 'true' ? 1 : Number.isInteger(Number(process.env.TRUST_PROXY)) && process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) : 0;
 
 export const config = {
   isProd,
@@ -51,6 +56,8 @@ export const config = {
   localDemo,
   jwtSecret,
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+  /** CLIENT_URL split into trimmed origins. */
+  clientOrigins: (process.env.CLIENT_URL || 'http://localhost:5173').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean),
   /**
    * Seed the demo institute into an EMPTY database. On by default only in local demo mode; on a
    * live server only when SEED_ON_EMPTY=true is set explicitly (e.g. a demo / sales site).
@@ -65,7 +72,7 @@ export const config = {
    */
   demoPayments: flag('DEMO_PAYMENTS', localDemo) && !isProd,
   /** Behind Nginx / a load balancer, set TRUST_PROXY=true so rate limits see the real client IP. */
-  trustProxy: process.env.TRUST_PROXY === 'true',
+  trustProxy: trustHops,
   /** Days a paid plan keeps working after its period ends, before falling back to Starter. */
   graceDays: Number.isFinite(Number(process.env.BILLING_GRACE_DAYS)) && process.env.BILLING_GRACE_DAYS ? Number(process.env.BILLING_GRACE_DAYS) : 3,
 };

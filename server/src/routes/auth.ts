@@ -7,13 +7,14 @@ import { effectivePlanKey, getPlan, trialDaysLeft } from '../services/plan.js';
 import { disconnectUser } from '../services/realtime.js';
 import { HttpError, ah, required } from '../utils/http.js';
 import { addDays } from '../utils/dates.js';
-import { EMAIL_RX, PHONE_RX, assertPassword, cleanName, createFailureGuard, optStr, rateLimit } from '../utils/security.js';
+import { isEmail, PHONE_RX, assertPassword, cleanName, createFailureGuard, optStr, rateLimit } from '../utils/security.js';
 
 const r = Router();
 
 // Two guards: one per (network, email) so a typo-prone user is slowed down, and one per
 // network so nobody can spray passwords across many accounts.
 const loginGuard = createFailureGuard({ windowMs: 15 * 60 * 1000, max: 8 });
+const emailGuard = createFailureGuard({ windowMs: 60 * 60 * 1000, max: 30 });
 const ipGuard = createFailureGuard({ windowMs: 15 * 60 * 1000, max: 40 });
 const registerLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: 'Too many sign-ups from this network. Please try again later.' });
 // Compared against when the email does not exist, so response time doesn't reveal which emails have accounts.
@@ -70,7 +71,7 @@ r.post(
     const phone = optStr(req.body.phone, 20);
     const city = optStr(req.body.city, 80);
     const type = optStr(req.body.type, 60);
-    if (!EMAIL_RX.test(email)) throw new HttpError(400, 'Enter a valid email address');
+    if (!isEmail(email)) throw new HttpError(400, 'Enter a valid email address');
     if (phone && !PHONE_RX.test(phone)) throw new HttpError(400, 'Enter a valid phone number');
     if (await User.exists({ email })) throw new HttpError(409, 'An account with this email already exists');
 
@@ -93,6 +94,9 @@ r.post(
       password: await bcrypt.hash(password, 10),
       role: 'owner',
       instituteId: institute._id,
+    }).catch(async (e) => {
+      await Institute.deleteOne({ _id: institute._id }); // no orphan institute when the email was taken in a race
+      throw (e as { code?: number }).code === 11000 ? new HttpError(409, 'An account with this email already exists') : e;
     });
     res.status(201).json({ token: signToken(String(user._id), 0), ...(await sessionPayload(user._id)) });
   }),
@@ -109,16 +113,18 @@ r.post(
     // Behind a proxy without TRUST_PROXY every visitor shares one IP — a per-IP limit would then
     // lock out the whole site, so it only applies when real client IPs are known.
     const useIpGuard = !config.isProd || config.trustProxy;
-    const wait = Math.max(loginGuard.check(key), useIpGuard ? ipGuard.check(ip) : 0);
+    const wait = Math.max(emailGuard.check(email), loginGuard.check(key), useIpGuard ? ipGuard.check(ip) : 0);
     if (wait) throw new HttpError(429, `Too many failed attempts. Try again in ${Math.ceil(wait / 60)} minute(s).`);
     const user = await User.findOne({ email }).select('+password');
     const ok = await bcrypt.compare(password, user?.password ?? DUMMY_HASH);
     if (!user || !ok) {
       loginGuard.fail(key);
+      emailGuard.fail(email);
       if (useIpGuard) ipGuard.fail(ip);
       throw new HttpError(401, 'Invalid email or password');
     }
     loginGuard.reset(key);
+    emailGuard.reset(email);
     if (!user.active) throw new HttpError(403, 'Your account has been disabled');
     // No token for anyone from a suspended institute.
     if (user.role !== 'superadmin') {

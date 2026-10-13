@@ -1,7 +1,7 @@
 import {
   AlertTriangle, ArrowRight, BarChart3, Bell, BellRing, BookOpen, BookText, Brain, CalendarCheck, Check, ChevronDown, ClipboardList,
   Code2, Crown, FileSpreadsheet, GraduationCap, IndianRupee, Landmark, Languages, LayoutDashboard, Mail, Menu, MessageCircle,
-  MessageSquare, Minus, NotebookPen, Play, School, Smartphone, Sparkles, Star, Stethoscope, UserSquare2, Users, X, Zap,
+  MessageSquare, Minus, NotebookPen, Play, School, Smartphone, Sparkles, Stethoscope, UserSquare2, Users, X, Zap,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -227,20 +227,9 @@ function Hero() {
           </p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row lg:justify-start">
             <Link to="/register" className="btn-premium px-6 py-3.5 text-base">Start free trial <ArrowRight className="h-5 w-5" /></Link>
-            <Link to="/login" className="btn-secondary px-6 py-3.5 text-base"><Play className="h-4 w-4 text-brand-600" /> Try live demo</Link>
+            <a href="#features" className="btn-secondary px-6 py-3.5 text-base"><Play className="h-4 w-4 text-brand-600" /> See features</a>
           </div>
           <p className="mt-4 text-sm font-medium text-slate-500">✨ 30-day free pilot · No card needed · Setup in 10 minutes</p>
-          <div className="mt-8 flex items-center justify-center gap-4 lg:justify-start">
-            <div className="flex -space-x-2">
-              {['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#0ea5e9'].map((c, i) => (
-                <div key={c} className="grid h-8 w-8 place-items-center rounded-full text-[10px] font-bold text-white ring-2 ring-white" style={{ background: c }}>{['RS', 'AK', 'PM', 'SV', 'NJ'][i]}</div>
-              ))}
-            </div>
-            <div className="text-left">
-              <div className="flex text-amber-400">{Array.from({ length: 5 }).map((_, i) => <Star key={i} className="h-4 w-4 fill-current" />)}</div>
-              <p className="text-xs text-slate-500">Loved by institute owners & teachers</p>
-            </div>
-          </div>
         </div>
         <div className="animate-fade-up [animation-delay:.15s]"><DashboardMockup /></div>
       </div>
@@ -545,41 +534,11 @@ function Pricing() {
   );
 }
 
-function Testimonials() {
-  const t = [
-    { name: 'Rajesh Sharma', role: 'JEE/NEET institute, Jaipur', color: '#6366f1', text: 'Fee collection went from “chasing parents every week” to “reminders go out by themselves”. My pending fees dropped a lot within the first month.' },
-    { name: 'Anita Kulkarni', role: 'School tuition, Pune', color: '#ec4899', text: 'Parents stopped calling to ask about attendance and marks — they just see it in the portal. My teachers love how quick attendance is.' },
-    { name: 'Mohd. Imran', role: 'SSC/Banking academy, Lucknow', color: '#10b981', text: 'I finally know which batch is profitable and which students need help. The morning dashboard is the first thing I open.' },
-  ];
-  return (
-    <section className="bg-white py-20 sm:py-24">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <SectionTitle eyebrow="Stories" title="What institute owners tell us" text={<span className="text-sm">Illustrative examples of the outcomes CoachFlow is built for.</span>} />
-        <div className="mt-12 grid gap-6 md:grid-cols-3">
-          {t.map((x) => (
-            <figure key={x.name} className="card flex flex-col p-7">
-              <div className="flex text-amber-400">{Array.from({ length: 5 }).map((_, i) => <Star key={i} className="h-4 w-4 fill-current" />)}</div>
-              <blockquote className="mt-4 flex-1 leading-relaxed text-slate-600">“{x.text}”</blockquote>
-              <figcaption className="mt-6 flex items-center gap-3">
-                <div className="grid h-10 w-10 place-items-center rounded-full text-sm font-bold text-white" style={{ background: x.color }}>{x.name.split(' ').map((w) => w[0]).slice(0, 2).join('')}</div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900">{x.name}</p>
-                  <p className="text-xs text-slate-500">{x.role}</p>
-                </div>
-              </figcaption>
-            </figure>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function FAQ() {
   const qs = [
     { q: 'Is there really a free trial?', a: 'Yes. Every new institute gets a 30-day free pilot with all Premium features. No credit card is needed to start.' },
     { q: 'Do my teachers and parents need to install an app?', a: 'No. CoachFlow works in any browser on phone, tablet or computer. Teachers and parents simply log in with their email.' },
-    { q: 'How do WhatsApp notifications work?', a: 'On Growth and Premium plans, CoachFlow sends absence alerts, fee reminders and results to parents through a WhatsApp Business provider connected to your account.' },
+    { q: 'How do parent notifications work?', a: 'Parents with a portal login get absence alerts, fee reminders and results inside CoachFlow, live. WhatsApp, SMS and email delivery depend on the messaging provider connected to your account.' },
     { q: 'Can I import my existing students?', a: 'Yes. You can add students one by one or bulk-import them from a CSV file (save your Excel sheet as CSV) in a few minutes.' },
     { q: 'Is my data safe?', a: 'Your data is stored securely and isolated per institute. Only people you invite can see it, and you can export it any time.' },
     { q: 'Can I change or cancel my plan later?', a: 'Anytime. Upgrade, downgrade or cancel from the Subscription page — no calls, no lock-in.' },
@@ -617,7 +576,7 @@ function FinalCTA() {
           <p className="mx-auto mt-4 max-w-xl text-white/80">Set up in 10 minutes. Try every Premium feature free for 30 days.</p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
             <Link to="/register" className="btn bg-white px-6 py-3.5 text-base text-brand-700 hover:bg-amber-50">Start free trial <ArrowRight className="h-5 w-5" /></Link>
-            <Link to="/login" className="btn border border-white/30 px-6 py-3.5 text-base text-white hover:bg-white/10">See the live demo</Link>
+            <Link to="/login" className="btn border border-white/30 px-6 py-3.5 text-base text-white hover:bg-white/10">Login</Link>
           </div>
           <p className="mt-4 text-sm text-white/70">30-day free pilot · No card needed</p>
         </div>
@@ -629,7 +588,7 @@ function FinalCTA() {
 function Footer() {
   const cols = [
     { h: 'Product', l: [['Features', '#features'], ['How it works', '#how'], ['Pricing', '#pricing'], ['FAQ', '#faq']] },
-    { h: 'Account', l: [['Login', '/login'], ['Start free trial', '/register']] },
+    { h: 'Account', l: [['Login', '/login'], ['Start free trial', '/register'], ['Terms', '/terms'], ['Privacy', '/privacy']] },
   ];
   return (
     <footer className="border-t border-slate-200 bg-white">
@@ -676,7 +635,6 @@ export default function Landing() {
       <HowItWorks />
       <WhoFor />
       <Pricing />
-      <Testimonials />
       <FAQ />
       <FinalCTA />
       <Footer />

@@ -74,8 +74,8 @@ export default function Subscription() {
   }
 
   const activeCycle: Cycle = cycle ?? data.billingCycle;
-  const current = data.plans.find((p) => p.key === data.plan);
-  const currentIdx = data.plans.findIndex((p) => p.key === data.plan);
+  const current = data.plans.find((p) => p.key === data.effectivePlan);
+  const currentIdx = data.plans.findIndex((p) => p.key === data.effectivePlan);
   const isTrial = data.status === 'trial';
   const isCancelled = data.status === 'cancelled';
   const isPastDue = data.status === 'past_due';
@@ -162,12 +162,12 @@ export default function Subscription() {
 
       {/* ── Current plan ── */}
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className={clsx('relative overflow-hidden rounded-3xl bg-gradient-to-br p-6 text-white shadow-glow sm:p-7 lg:col-span-2', PLAN_STYLE[data.plan])}>
+        <div className={clsx('relative overflow-hidden rounded-3xl bg-gradient-to-br p-6 text-white shadow-glow sm:p-7 lg:col-span-2', PLAN_STYLE[data.effectivePlan])}>
           <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/10 blur-2xl" />
           <div className="relative grid gap-6 md:grid-cols-2">
             <div>
               <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-white/70"><Crown className="h-4 w-4 text-amber-300" /> Current plan</p>
-              <h2 className="mt-2 text-3xl font-extrabold">{current?.name ?? data.plan}</h2>
+              <h2 className="mt-2 text-3xl font-extrabold">{current?.name ?? data.effectivePlan}</h2>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className="rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-bold capitalize ring-1 ring-white/20">{data.status.replace('_', ' ')}</span>
                 <span className="rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-bold capitalize ring-1 ring-white/20">{data.billingCycle}</span>
@@ -250,11 +250,11 @@ export default function Subscription() {
           return (
             <div key={p.key} className={clsx('relative flex flex-col rounded-3xl bg-white p-6 transition',
               p.popular ? 'ring-2 ring-violet-500 shadow-xl shadow-violet-500/10' : 'ring-1 ring-slate-200 hover:shadow-lg',
-              p.key === data.plan && 'bg-gradient-to-b from-brand-50/60 to-white')}>
+              p.key === data.effectivePlan && 'bg-gradient-to-b from-brand-50/60 to-white')}>
               {p.popular && <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-gradient-to-r from-brand-600 to-fuchsia-600 px-3 py-1 text-[11px] font-extrabold text-white shadow">⭐ POPULAR</span>}
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-extrabold text-slate-900">{p.name}</h3>
-                {p.key === data.plan && <Badge tone="brand">Your plan</Badge>}
+                {p.key === data.effectivePlan && <Badge tone="brand">Your plan</Badge>}
               </div>
               <p className="text-sm text-slate-500">{p.tagline}</p>
               <p className="mt-4 text-3xl font-extrabold tracking-tight text-slate-900">{inr(price(p))}<span className="text-sm font-medium text-slate-400"> / {activeCycle === 'yearly' ? 'year' : 'month'}</span></p>

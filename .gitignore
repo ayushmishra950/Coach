@@ -3,3 +3,4 @@ dist
 .env
 .mongo-data
 .DS_Store
+client/tsconfig.tsbuildinfo

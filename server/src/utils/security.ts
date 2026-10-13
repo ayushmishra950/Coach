@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import zlib from 'node:zlib';
 import type { NextFunction, Request, Response } from 'express';
 import { HttpError } from './http.js';
@@ -9,7 +11,7 @@ export const PASSWORD_MIN = 8;
 export function assertPassword(p: unknown, label = 'Password') {
   if (typeof p !== 'string') throw new HttpError(400, `${label} is required`);
   if (p.length < PASSWORD_MIN) throw new HttpError(400, `${label} must be at least ${PASSWORD_MIN} characters`);
-  if (p.length > 128) throw new HttpError(400, `${label} is too long`);
+  if (p.length > 72) throw new HttpError(400, `${label} is too long (max 72 characters)`);
   return p;
 }
 
@@ -28,7 +30,9 @@ export function cleanName(v: unknown, label = 'Name') {
   return s;
 }
 
-export const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Linear-time pattern (no overlapping quantifiers → no catastrophic backtracking) plus a length cap.
+export const EMAIL_RX = /^[^\s@]{1,64}@[^\s@.]{1,255}(?:\.[^\s@.]{1,63}){1,8}$/;
+export const isEmail = (v: unknown): v is string => typeof v === 'string' && v.length <= 254 && EMAIL_RX.test(v);
 export const PHONE_RX = /^\+?[0-9][0-9\s-]{6,16}$/;
 export const HEX_COLOR_RX = /^#[0-9a-f]{6}$/i;
 
@@ -63,7 +67,9 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
     'Content-Security-Policy',
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
   );
-  if (_req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  if (_req.secure || process.env.NODE_ENV === 'production') res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // Authenticated API responses must never be cached by browsers or shared proxies.
+  if (_req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store');
   next();
 }
 
@@ -172,3 +178,48 @@ export function flatQueryParser(qs: string) {
   for (const [k, v] of new URLSearchParams(qs)) if (!(k in out)) out[k] = v;
   return out;
 }
+
+/**
+ * Serves .js / .css / .svg / .json / .html build files gzipped (compressed once, kept in memory).
+ * Without it Node sends the raw 420 KB charts bundle; with it ~110 KB. Put it before express.static.
+ */
+export function staticGzip(root: string) {
+  const cache = new Map<string, { mtime: number; buf: Buffer }>();
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'GET' || !/\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))) return next();
+    const rel = decodeURIComponent(req.path);
+    if (!/\.(js|css|svg|json|webmanifest|txt|html)$/i.test(rel) || rel.includes('..')) return next();
+    const file = path.join(root, rel);
+    if (!file.startsWith(root)) return next();
+    fs.stat(file, (err, st) => {
+      if (err || !st.isFile()) return next();
+      const hit = cache.get(file);
+      const send = (buf: Buffer) => {
+        res.setHeader('Content-Type', mime[path.extname(file).toLowerCase()] ?? 'application/octet-stream');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Vary', 'Accept-Encoding');
+        res.setHeader('Cache-Control', /\/assets\//.test(req.path) ? 'public, max-age=31536000, immutable' : 'public, max-age=3600');
+        res.setHeader('Content-Length', String(buf.length));
+        res.end(buf);
+      };
+      if (hit && hit.mtime === st.mtimeMs) return send(hit.buf);
+      fs.readFile(file, (e2, raw) => {
+        if (e2) return next();
+        zlib.gzip(raw, { level: 9 }, (e3, buf) => {
+          if (e3) return next();
+          cache.set(file, { mtime: st.mtimeMs, buf });
+          send(buf);
+        });
+      });
+    });
+  };
+}
+const mime: Record<string, string> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+  '.txt': 'text/plain; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+};

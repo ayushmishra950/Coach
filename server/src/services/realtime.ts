@@ -81,7 +81,7 @@ async function broadcastPresence(userId: string, isOn: boolean) {
 
 export function initRealtime(server: HttpServer) {
   io = new Server(server, {
-    cors: { origin: config.clientUrl.split(','), credentials: true },
+    cors: { origin: config.clientOrigins, credentials: true },
     maxHttpBufferSize: 64 * 1024,
   });
 
@@ -105,6 +105,7 @@ export function initRealtime(server: HttpServer) {
     }
   });
   console.log('✓ Realtime chat ready (Socket.IO)');
+  return io;
 }
 
 function onConnection(socket: Socket) {

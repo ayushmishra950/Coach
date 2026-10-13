@@ -7,6 +7,7 @@ import { homeFor, useAuth } from './context/AuthContext';
 const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
+const Legal = lazy(() => import('./pages/Legal'));
 
 const Dashboard = lazy(() => import('./pages/app/Dashboard'));
 const Students = lazy(() => import('./pages/app/Students'));
@@ -49,6 +50,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={session ? <AfterLogin role={session.user.role} /> : <Login />} />
+        <Route path="/terms" element={<Legal kind="terms" />} />
+        <Route path="/privacy" element={<Legal kind="privacy" />} />
         <Route path="/register" element={session ? <Navigate to={homeFor(session.user.role)} replace /> : <Register />} />
 
         <Route path="/app" element={<Protected roles={['owner', 'teacher']}><Shell variant="app" /></Protected>}>
