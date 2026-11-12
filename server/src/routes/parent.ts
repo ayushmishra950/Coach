@@ -27,7 +27,11 @@ r.get(
       const [batches, attDocs, tests, invoices, payments] = await Promise.all([
         Batch.find({ _id: { $in: s.batchIds }, instituteId }).select('name subject days startTime endTime teacherId coTeacherIds').populate('teacherId', 'name').populate('coTeacherIds', 'name').lean(),
         Attendance.find({ instituteId, 'records.studentId': s._id }).select('date batchId records').sort({ date: -1 }).limit(60).populate('batchId', 'name').lean(),
-        Test.find({ instituteId, status: 'published', 'results.studentId': s._id }).select('subject topic date maxMarks passPercent results').sort({ date: -1 }).limit(20).lean(),
+        Test.find({ instituteId, status: 'published', 'results.studentId': s._id })
+          .select('subject topic date maxMarks passPercent results')
+          .sort({ publishedAt: -1, date: -1, _id: -1 })
+          .limit(20)
+          .lean(),
         Invoice.find({ instituteId, studentId: s._id }).sort({ dueDate: 1 }).lean(),
         Payment.find({ instituteId, studentId: s._id }).select('amount method receiptNo paidAt status invoiceId balanceAfter').sort({ paidAt: -1 }).limit(50).lean(),
       ]);
@@ -50,7 +54,12 @@ r.get(
         })),
         attendance: {
           ...(att.get(String(s._id)) ?? { pct: 0, total: 0, present: 0 }),
-          recent: attDocs.map((a) => ({ date: a.date, batch: (a.batchId as unknown as { name?: string })?.name, status: a.records.find((x) => String(x.studentId) === String(s._id))?.status })),
+          recent: attDocs.map((a) => ({
+            date: a.date,
+            batch: (a.batchId as unknown as { name?: string })?.name,
+            batchId: String((a.batchId as unknown as { _id?: unknown })?._id ?? a.batchId),
+            status: a.records.find((x) => String(x.studentId) === String(s._id))?.status,
+          })),
         },
         results,
         latestResult: results[0] ?? null,

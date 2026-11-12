@@ -115,6 +115,7 @@ export async function recordPayment(opts: {
       type: 'payment',
       audience: 'parent',
       studentId: student._id,
+      href: `/portal/receipt/${payment._id}`,
       title: 'Payment received',
       message: `We received ${inr(amount)} for ${student.name} (${invoice.title}). Receipt #${receiptNo}. Thank you!`,
       contact: { phone: student.parentPhone ?? undefined, email: student.parentEmail ?? undefined },
@@ -124,6 +125,7 @@ export async function recordPayment(opts: {
       type: 'payment',
       audience: 'owner',
       studentId: student._id,
+      href: `/app/fees/receipt/${payment._id}`,
       title: 'Fee collected',
       message: `${inr(amount)} received from ${student.name} via ${opts.method.toUpperCase()} — ${receiptNo}`,
     });

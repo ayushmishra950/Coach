@@ -1,24 +1,25 @@
 import {
   Bell, BookOpen, CalendarCheck, CalendarClock, CheckCircle2, ClipboardList, Clock, CreditCard, IndianRupee, LogOut, Megaphone, MessageCircle, Phone, Receipt, ShieldCheck, User,
 } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Logo } from '../../components/Logo';
 import { NOTIF_ICON, NotificationBell } from '../../components/NotificationBell';
 import { Badge, Button, EmptyState, ErrorState, Modal, PageLoader, StatusBadge, clsx } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
-import { useRealtime } from '../../context/RealtimeContext';
+import { useRealtime, useSocketEvent } from '../../context/RealtimeContext';
 import { Pager } from '../../components/Pager';
 import { useApi, useClientPage, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
 import { fmtDate, fmtDateShort, fmtTime, inr, pctTone, timeAgo, toDate, ymd } from '../../lib/format';
+import { notificationHref } from '../../lib/notifications';
 import type { Announcement, Invoice, Notification, Payment } from '../../lib/types';
 
 interface Child {
   student: { _id: string; name: string; studentCode: string; course?: string };
   batches: { _id: string; name: string; subject?: string; days: string[]; startTime: string; endTime: string; teacher?: string }[];
-  attendance: { pct: number; total: number; present: number; recent: { date: string; batch?: string; status?: 'present' | 'absent' | 'late' }[] };
+  attendance: { pct: number; total: number; present: number; recent: { date: string; batch?: string; batchId: string; status?: 'present' | 'absent' | 'late' }[] };
   results: {
     _id: string; subject: string; topic?: string; date: string; maxMarks: number; marks: number | null; absent: boolean; pct: number | null;
     passPercent?: number; remark?: string | null;
@@ -63,15 +64,39 @@ export default function ParentPortal() {
   const { chatUnread } = useRealtime();
   const { data, loading, error, status, reload } = useApi<Overview>('/parent/overview');
   const [idx, setIdx] = useState(0);
-  const child = data?.children[Math.min(idx, (data?.children.length ?? 1) - 1)];
+  const testRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const location = useLocation();
-  // The bell's "View all" links to #notifications — router hash links don't scroll by themselves.
-  // Keyed on location.key so clicking it again (same hash) still scrolls.
+  const requestedStudent = new URLSearchParams(location.search).get('student');
+  const child = data?.children[Math.min(idx, (data?.children.length ?? 1) - 1)];
+  useSocketEvent<{ type: string; studentId?: string }>('notification:new', (notification) => {
+    if (notification.type !== 'test') return;
+    if (notification.studentId && data) {
+      const target = data.children.findIndex((c) => c.student._id === notification.studentId);
+      if (target >= 0) setIdx(target);
+    }
+    if (testRefreshTimer.current) clearTimeout(testRefreshTimer.current);
+    testRefreshTimer.current = setTimeout(() => {
+      testRefreshTimer.current = null;
+      reload();
+    }, 150);
+  });
+  useEffect(() => () => {
+    if (testRefreshTimer.current) clearTimeout(testRefreshTimer.current);
+  }, []);
+
   useEffect(() => {
-    if (location.hash !== '#notifications') return;
-    const t = window.setTimeout(() => document.getElementById('notifications')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    if (!requestedStudent || !data) return;
+    const target = data.children.findIndex((c) => c.student._id === requestedStudent);
+    if (target >= 0) setIdx(target);
+  }, [data, requestedStudent]);
+
+  // Router hash links do not scroll by themselves; notification links may target a section or item.
+  useEffect(() => {
+    if (!location.hash) return;
+    const id = location.hash.slice(1);
+    const t = window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
     return () => window.clearTimeout(t);
-  }, [location.hash, location.key, !!data]);
+  }, [location.hash, location.key, !!data, idx]);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-brand-50/70 via-slate-50 to-slate-50">
@@ -291,12 +316,19 @@ function ChildView({ child, announcements, institute, onReload }: { child: Child
 
 function FeesSection({ fees, onReload, onlinePay, phone }: { fees: Child['fees']; onReload: () => void; onlinePay: boolean; phone?: string }) {
   const navigate = useNavigate();
+  const { hash } = useLocation();
   const [payInv, setPayInv] = useState<Invoice | null>(null);
   const [paying, setPaying] = useState(false);
   const [done, setDone] = useState<Payment | null>(null);
   const paidPct = fees.total ? Math.round((fees.paid / fees.total) * 100) : 0;
   const invPage = useClientPage(fees.invoices);
   const payPage = useClientPage(fees.payments);
+  const targetInvoice = hash.startsWith('#invoice-') ? hash.slice('#invoice-'.length) : null;
+  useEffect(() => {
+    if (!targetInvoice) return;
+    const index = fees.invoices.findIndex((invoice) => invoice._id === targetInvoice);
+    if (index >= 0) invPage.pager.onChange(Math.floor(index / invPage.pager.limit) + 1);
+  }, [fees.invoices, invPage.pager.limit, invPage.pager.onChange, targetInvoice]);
 
   const pay = async () => {
     if (!payInv) return;
@@ -338,7 +370,7 @@ function FeesSection({ fees, onReload, onlinePay, phone }: { fees: Child['fees']
             const state = dueState(inv);
             const overdue = state === 'overdue';
             return (
-              <li key={inv._id} className={clsx('flex items-center justify-between gap-3 rounded-2xl border p-3.5', overdue ? 'border-rose-200 bg-rose-50/50' : 'border-slate-100')}>
+              <li id={`invoice-${inv._id}`} key={inv._id} className={clsx('flex items-center justify-between gap-3 rounded-2xl border p-3.5', overdue ? 'border-rose-200 bg-rose-50/50' : 'border-slate-100')}>
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-slate-800">{inv.title}</p>
                   <p className="text-xs text-slate-500">{inr(inv.amount)} · due {fmtDate(inv.dueDate)}</p>
@@ -409,7 +441,7 @@ function FeesSection({ fees, onReload, onlinePay, phone }: { fees: Child['fees']
 }
 
 function ResultsSection({ results }: { results: Child['results'] }) {
-  const page = useClientPage(results);
+  const page = useClientPage(results, results[0]?._id);
   return (
     <Section id="results" title="Results" icon={<ClipboardList className="h-4 w-4" />}>
       {results.length === 0 ? <p className="py-6 text-center text-sm text-slate-400">No published results yet.</p> : (
@@ -418,7 +450,7 @@ function ResultsSection({ results }: { results: Child['results'] }) {
             const pass = r.passPercent ?? 40;
             const passed = r.pct != null && r.pct >= pass;
             return (
-            <li key={r._id}>
+            <li id={`test-${r._id}`} key={r._id}>
               <div className="flex items-baseline justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold text-slate-800">{r.subject}{r.topic ? <span className="font-normal text-slate-400"> · {r.topic}</span> : null}</p>
@@ -484,7 +516,7 @@ function AttendanceSection({ attendance }: { attendance: Child['attendance'] }) 
       {attendance.recent.length > 0 && (
         <ul className="mt-4 divide-y divide-slate-100 border-t border-slate-100">
           {page.items.map((r, i) => (
-            <li key={`${r.date}-${page.offset + i}`} className="flex items-center justify-between gap-2 py-2 text-sm">
+            <li id={`attendance-${r.date}-${r.batchId}`} key={`${r.date}-${page.offset + i}`} className="flex items-center justify-between gap-2 py-2 text-sm">
               <div className="min-w-0">
                 <p className="font-medium text-slate-700">{fmtDate(toDate(r.date), { weekday: 'short', day: 'numeric', month: 'short' })}</p>
                 <p className="truncate text-xs text-slate-400">{r.batch}</p>
@@ -529,7 +561,7 @@ function AnnouncementsSection({ items }: { items: Overview['announcements'] }) {
       {items.length === 0 ? <p className="py-6 text-center text-sm text-slate-400">No announcements right now.</p> : (
         <ul className="space-y-3">
           {page.items.map((a) => (
-            <li key={a._id} className={clsx('rounded-2xl p-3.5', a.pinned ? 'bg-amber-50 ring-1 ring-amber-200' : 'bg-slate-50')}>
+            <li id={`announcement-${a._id}`} key={a._id} className={clsx('rounded-2xl p-3.5', a.pinned ? 'bg-amber-50 ring-1 ring-amber-200' : 'bg-slate-50')}>
               <p className="text-sm font-bold text-slate-800">{a.pinned && '📌 '}{a.title}</p>
               <p className="mt-1 whitespace-pre-line text-sm text-slate-600">{a.body}</p>
               <p className="mt-1.5 text-xs text-slate-400">{a.createdByName ? `${a.createdByName} · ` : ''}{timeAgo(a.createdAt)}</p>
@@ -544,7 +576,16 @@ function AnnouncementsSection({ items }: { items: Overview['announcements'] }) {
 
 function NotificationsSection() {
   const list = usePagedApi<Notification, { unread: number }>('/notifications');
-  const { data, loading } = list;
+  const { data, loading, setData } = list;
+  const markOne = (n: Notification) => {
+    if (n.read || !data) return;
+    setData({
+      ...data,
+      items: data.items.map((item) => item._id === n._id ? { ...item, read: true } : item),
+      unread: Math.max(0, data.unread - 1),
+    });
+    api.put(`/notifications/${n._id}/read`).catch((e) => toast.error(errMsg(e, 'Could not mark notification as read')));
+  };
   return (
     <Section id="notifications" title="Notifications" icon={<Bell className="h-4 w-4" />}
       action={data?.unread ? <Badge tone="brand">{data.unread} new</Badge> : undefined}>
@@ -555,14 +596,17 @@ function NotificationsSection() {
           {data.items.map((n) => {
             const I = NOTIF_ICON[n.type] ?? NOTIF_ICON.system;
             return (
-              <li key={n._id} className={clsx('flex gap-3 rounded-xl p-2.5', !n.read && 'bg-brand-50/50')}>
-                <div className={clsx('grid h-9 w-9 shrink-0 place-items-center rounded-xl', I.cls)}><I.icon className="h-4 w-4" /></div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-800">{n.title}</p>
-                  <p className="text-xs text-slate-500">{n.message}</p>
-                  <p className="mt-0.5 text-[11px] text-slate-400">{timeAgo(n.createdAt)}</p>
-                </div>
-                {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-500" />}
+              <li key={n._id}>
+                <Link to={notificationHref(n, 'parent')} onClick={() => markOne(n)}
+                  className={clsx('flex gap-3 rounded-xl p-2.5 hover:bg-slate-50', !n.read && 'bg-brand-50/50')}>
+                  <div className={clsx('grid h-9 w-9 shrink-0 place-items-center rounded-xl', I.cls)}><I.icon className="h-4 w-4" /></div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-800">{n.title}</p>
+                    <p className="text-xs text-slate-500">{n.message}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">{timeAgo(n.createdAt)}</p>
+                  </div>
+                  {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-500" />}
+                </Link>
               </li>
             );
           })}

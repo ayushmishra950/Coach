@@ -8,7 +8,9 @@ import { useAuth } from '../../context/AuthContext';
 import { usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
 import { fmtDateTime, timeAgo } from '../../lib/format';
+import { notificationHref } from '../../lib/notifications';
 import type { Notification } from '../../lib/types';
+import { Link } from 'react-router-dom';
 
 type NType = Notification['type'];
 type Channel = Notification['deliveries'][number]['channel'];
@@ -35,6 +37,7 @@ function Inbox() {
     unread: filter === 'unread' ? '1' : undefined,
   });
   const { data, loading, error, reload, setData } = list;
+  const { session } = useAuth();
   const [marking, setMarking] = useState(false);
 
   const items = useMemo(() => data?.items ?? [], [data]);
@@ -58,7 +61,7 @@ function Inbox() {
   const markOne = async (n: Notification) => {
     if (n.read || !data) return;
     setData({ ...data, items: data.items.map((x) => (x._id === n._id ? { ...x, read: true } : x)), unread: Math.max(0, data.unread - 1) });
-    api.put(`/notifications/${n._id}/read`).catch(() => {});
+    api.put(`/notifications/${n._id}/read`).catch((e) => toast.error(errMsg(e, 'Could not mark notification as read')));
   };
 
   if (error) return <ErrorState message={error} onRetry={reload} />;
@@ -85,18 +88,20 @@ function Inbox() {
             {shown.map((n) => {
               const I = NOTIF_ICON[n.type] ?? NOTIF_ICON.system;
               return (
-                <li key={n._id} onClick={() => markOne(n)}
-                  className={clsx('flex cursor-pointer gap-4 px-5 py-4 transition hover:bg-slate-50', !n.read && 'bg-brand-50/40')}>
-                  <div className={clsx('grid h-11 w-11 shrink-0 place-items-center rounded-2xl', I.cls)}><I.icon className="h-5 w-5" /></div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className={clsx('text-sm text-slate-900', n.read ? 'font-semibold' : 'font-bold')}>{n.title}</p>
-                      <Badge tone="gray">{TYPE_LABEL[n.type] ?? n.type}</Badge>
+                <li key={n._id}>
+                  <Link to={notificationHref(n, session?.user.role ?? 'owner')} onClick={() => markOne(n)}
+                    className={clsx('flex gap-4 px-5 py-4 transition hover:bg-slate-50', !n.read && 'bg-brand-50/40')}>
+                    <div className={clsx('grid h-11 w-11 shrink-0 place-items-center rounded-2xl', I.cls)}><I.icon className="h-5 w-5" /></div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className={clsx('text-sm text-slate-900', n.read ? 'font-semibold' : 'font-bold')}>{n.title}</p>
+                        <Badge tone="gray">{TYPE_LABEL[n.type] ?? n.type}</Badge>
+                      </div>
+                      <p className="mt-0.5 text-sm text-slate-600">{n.message}</p>
+                      <p className="mt-1.5 text-xs text-slate-400">{timeAgo(n.createdAt)}{typeof n.studentId === 'object' && n.studentId?.name && <> · {n.studentId.name}</>}</p>
                     </div>
-                    <p className="mt-0.5 text-sm text-slate-600">{n.message}</p>
-                    <p className="mt-1.5 text-xs text-slate-400">{timeAgo(n.createdAt)}{n.studentId?.name && <> · {n.studentId.name}</>}</p>
-                  </div>
-                  {!n.read && <span className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-brand-500" />}
+                    {!n.read && <span className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-brand-500" />}
+                  </Link>
                 </li>
               );
             })}
@@ -198,7 +203,7 @@ function MessageLog() {
                         </div>
                       </td>
                       <td><Badge tone={AUD_TONE[n.audience]} className="capitalize">{n.audience}</Badge></td>
-                      <td className="text-slate-700">{n.studentId?.name ?? '—'}</td>
+                      <td className="text-slate-700">{typeof n.studentId === 'object' ? n.studentId?.name ?? '—' : '—'}</td>
                       <td>
                         <div className="flex flex-wrap gap-1.5">
                           {n.deliveries.map((d, i) => {

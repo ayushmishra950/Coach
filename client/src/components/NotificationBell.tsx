@@ -5,7 +5,9 @@ import toast from 'react-hot-toast';
 import { useRealtime, useSocketEvent } from '../context/RealtimeContext';
 import { api, errMsg } from '../lib/api';
 import { timeAgo } from '../lib/format';
+import { notificationHref } from '../lib/notifications';
 import type { Notification } from '../lib/types';
+import { useAuth } from '../context/AuthContext';
 import { clsx } from './ui';
 
 export const NOTIF_ICON = {
@@ -23,6 +25,7 @@ export function NotificationBell({ allHref }: { allHref: string }) {
   const [unread, setUnread] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const { connected } = useRealtime();
+  const { session } = useAuth();
 
   // Light request: latest 10 + a capped unread count (no totals, no per-type counts).
   const load = () =>
@@ -70,6 +73,14 @@ export function NotificationBell({ allHref }: { allHref: string }) {
     }
   };
 
+  const openNotification = (n: Notification) => {
+    setOpen(false);
+    if (n.read) return;
+    setItems((cur) => cur.map((item) => item._id === n._id ? { ...item, read: true } : item));
+    setUnread((count) => Math.max(0, count - 1));
+    api.put(`/notifications/${n._id}/read`).catch((e) => toast.error(errMsg(e, 'Could not mark notification as read')));
+  };
+
   return (
     <div className="relative" ref={ref}>
       <button onClick={() => { setOpen(!open); if (!open) load(); }} className="relative rounded-xl p-2.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800" aria-label="Notifications">
@@ -95,7 +106,9 @@ export function NotificationBell({ allHref }: { allHref: string }) {
             {items.map((n) => {
               const I = NOTIF_ICON[n.type] ?? NOTIF_ICON.system;
               return (
-                <div key={n._id} className={clsx('flex gap-3 border-b border-slate-50 px-4 py-3', !n.read && 'bg-brand-50/40')}>
+                <Link to={notificationHref(n, session?.user.role ?? 'parent')} key={n._id}
+                  onClick={() => openNotification(n)}
+                  className={clsx('flex gap-3 border-b border-slate-50 px-4 py-3 hover:bg-slate-50', !n.read && 'bg-brand-50/40')}>
                   <div className={clsx('grid h-9 w-9 shrink-0 place-items-center rounded-xl', I.cls)}><I.icon className="h-4 w-4" /></div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-slate-800">{n.title}</p>
@@ -103,7 +116,7 @@ export function NotificationBell({ allHref }: { allHref: string }) {
                     <p className="mt-1 text-[11px] text-slate-400">{timeAgo(n.createdAt)}</p>
                   </div>
                   {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-500" />}
-                </div>
+                </Link>
               );
             })}
           </div>

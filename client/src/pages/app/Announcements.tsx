@@ -106,7 +106,7 @@ export default function Announcements() {
                   const canDelete = isOwner || a.createdBy === session?.user.id;
                   const canEdit = canDelete;
                   return (
-                    <li key={a._id} className={clsx('group px-5 py-4 transition', a.pinned && 'bg-amber-50/50')}>
+                    <li id={`announcement-${a._id}`} key={a._id} className={clsx('group px-5 py-4 transition', a.pinned && 'bg-amber-50/50')}>
                       <div className="flex items-start gap-3">
                         <Avatar name={a.createdByName || 'Staff'} size="sm" />
                         <div className="min-w-0 flex-1">

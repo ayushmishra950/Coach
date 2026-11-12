@@ -94,6 +94,7 @@ r.post(
             type: 'attendance' as const,
             audience: 'parent' as const,
             studentId: s._id,
+            href: `/portal?student=${s._id}#attendance-${date}-${batch._id}`,
             title: 'Absent today',
             message: `${s.name} was absent today from ${batch.name}.`,
             contact: { phone: s.parentPhone ?? undefined, email: s.parentEmail ?? undefined },
@@ -110,7 +111,14 @@ r.post(
     for (const st of streaks.filter((x) => x.count === threshold && justAbsent.has(x.studentId))) {
       const s = valid.find((v) => String(v._id) === st.studentId);
       if (s) {
-        const alert = { institute: inst, type: 'attendance' as const, studentId: s._id, title: 'Attendance alert', message: `${s.name} has been absent for ${threshold} consecutive classes.` };
+        const alert = {
+          institute: inst,
+          type: 'attendance' as const,
+          studentId: s._id,
+          href: `/app/students/${s._id}`,
+          title: 'Attendance alert',
+          message: `${s.name} has been absent for ${threshold} consecutive classes.`,
+        };
         await notify({ ...alert, audience: 'owner' });
         // …and the batch's teachers, so they can follow up with the student.
         for (const t of [batch.teacherId, ...(batch.coTeacherIds ?? [])].filter(Boolean)) await notify({ ...alert, audience: 'staff', userId: t! });

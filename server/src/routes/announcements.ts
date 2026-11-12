@@ -21,7 +21,7 @@ const postLimit = rateLimit({
  * Sends an announcement to parents in the background, so posting returns at once even for
  * thousands of students. One message per family: siblings share a single notice.
  */
-function fanOut(institute: InstituteDoc, a: { title: string; body: string }, batchIds: Types.ObjectId[]) {
+function fanOut(institute: InstituteDoc, a: { _id: Types.ObjectId; title: string; body: string }, batchIds: Types.ObjectId[]) {
   setImmediate(async () => {
     try {
       const students = await Student.find({ instituteId: institute._id, status: 'active', ...(batchIds.length ? { batchIds: { $in: batchIds } } : {}) })
@@ -38,6 +38,7 @@ function fanOut(institute: InstituteDoc, a: { title: string; body: string }, bat
           type: 'announcement',
           audience: 'parent',
           studentId: s._id,
+          href: `/portal?student=${s._id}#announcement-${a._id}`,
           title: a.title,
           message: a.body,
           contact: { phone: s.parentPhone ?? undefined, email: s.parentEmail ?? undefined },
@@ -107,7 +108,14 @@ r.post(
     if (!staffOnly) fanOut(req.institute!, a, batchIds);
     // Institute-wide notices from the owner also reach every teacher's bell.
     if (req.user.role === 'owner' && !batchIds.length) {
-      notify({ institute: req.institute!, type: 'announcement', audience: 'staff', title: a.title, message: a.body }).catch(() => {});
+      notify({
+        institute: req.institute!,
+        type: 'announcement',
+        audience: 'staff',
+        href: `/app/announcements#announcement-${a._id}`,
+        title: a.title,
+        message: a.body,
+      }).catch(() => {});
     }
     res.status(201).json({ announcement: a, recipients });
   }),

@@ -11,6 +11,7 @@ const notificationSchema = new Schema(
     message: { type: String, required: true },
     audience: { type: String, enum: ['owner', 'staff', 'parent'], required: true },
     studentId: { type: Schema.Types.ObjectId, ref: 'Student' },
+    href: String,
     userId: { type: Schema.Types.ObjectId, ref: 'User' },
     deliveries: [
       {

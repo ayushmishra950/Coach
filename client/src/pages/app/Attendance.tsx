@@ -68,7 +68,10 @@ export default function Attendance() {
   const isOwner = session?.user.role === 'owner';
   const [params, setParams] = useSearchParams();
   const today = ymd();
-  const [date, setDate] = useState(today);
+  const [date, setDate] = useState(() => {
+    const requested = params.get('date');
+    return requested && /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= today ? requested : today;
+  });
   const [tab, setTab] = useState<TabKey>(params.get('tab') === 'alerts' ? 'alerts' : params.get('tab') === 'register' ? 'register' : 'mark');
   const selected = params.get('batchId');
 

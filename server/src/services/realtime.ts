@@ -35,10 +35,19 @@ export function emitToUser(userId: unknown, event: string, payload: unknown) {
 /** Pushes a freshly created in-app notification to everyone who should see it. */
 export function emitNotification(n: {
   _id: unknown; instituteId?: unknown; audience: string; studentId?: unknown; userId?: unknown;
-  type: string; title: string; message: string; createdAt?: Date;
+  type: string; title: string; message: string; href?: string | null; createdAt?: Date;
 }) {
   if (!io || !n.instituteId) return;
-  const payload = { _id: String(n._id), type: n.type, title: n.title, message: n.message, audience: n.audience, createdAt: n.createdAt ?? new Date() };
+  const payload = {
+    _id: String(n._id),
+    type: n.type,
+    title: n.title,
+    message: n.message,
+    href: n.href,
+    studentId: n.studentId ? String(n.studentId) : undefined,
+    audience: n.audience,
+    createdAt: n.createdAt ?? new Date(),
+  };
   const inst = String(n.instituteId);
   if (n.audience === 'parent') {
     if (n.studentId) io.to(`student:${String(n.studentId)}`).emit('notification:new', payload);

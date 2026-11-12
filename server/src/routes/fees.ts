@@ -235,6 +235,7 @@ r.post(
       type: 'fee',
       audience: 'parent',
       studentId: s._id,
+      href: `/portal?student=${s._id}#invoice-${inv._id}`,
       title: 'Fee reminder',
       message: `Reminder: ${s.name}'s ${inv.title} of ${inr(inv.amount - inv.paidAmount)} is due on ${inv.dueDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}.`,
       contact: { phone: s.parentPhone ?? undefined, email: s.parentEmail ?? undefined },

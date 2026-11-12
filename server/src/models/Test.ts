@@ -29,6 +29,7 @@ const testSchema = new Schema(
 );
 
 testSchema.index({ instituteId: 1, 'results.studentId': 1, date: -1 });
+testSchema.index({ instituteId: 1, 'results.studentId': 1, publishedAt: -1, date: -1, _id: -1 });
 testSchema.index({ instituteId: 1, batchId: 1, date: -1, _id: -1 });
 testSchema.index({ instituteId: 1, date: -1, _id: -1 });
 testSchema.index({ instituteId: 1, status: 1, date: -1 });

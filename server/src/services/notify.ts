@@ -100,6 +100,7 @@ export interface NotifyInput {
   /** parent = the student's parents, owner = institute owners, staff = teachers (a specific one via userId) */
   audience: 'owner' | 'staff' | 'parent';
   studentId?: Types.ObjectId;
+  href?: string;
   userId?: Types.ObjectId;
   contact?: { phone?: string; email?: string };
   /** In-app only (e.g. the same family was already messaged for a sibling). */

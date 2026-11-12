@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import fs from 'node:fs';
 import path from 'node:path';
 import mongoose from 'mongoose';
 import { config } from './config.js';
 
 export async function connectDB() {
+  if (config.mongoDnsServers.length > 0) dns.setServers(config.mongoDnsServers);
+
   let uri = config.mongoUri;
   if (!uri) {
     // No external database configured: run an embedded MongoDB that persists to disk.

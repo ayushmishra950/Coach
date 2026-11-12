@@ -236,6 +236,7 @@ r.post(
             type: 'test' as const,
             audience: 'parent' as const,
             studentId: s._id,
+            href: `/portal?student=${s._id}#test-${test._id}`,
             title: `${test.subject} result published`,
             message: x.absent ? `${s.name} was absent for the ${test.subject}${topic} test.` : `${s.name} scored ${x.marks}/${test.maxMarks} in ${test.subject}${topic}.`,
             contact: { phone: s.parentPhone ?? undefined, email: s.parentEmail ?? undefined },

@@ -66,6 +66,7 @@ export async function runReminders(institute: InstituteDoc) {
       type: 'fee',
       audience: 'parent',
       studentId: student._id,
+      href: `/portal?student=${student._id}#invoice-${inv._id}`,
       title: kind === 'after' ? 'Fee overdue' : 'Fee reminder',
       message,
       contact: { phone: student.parentPhone ?? undefined, email: student.parentEmail ?? undefined },

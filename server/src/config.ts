@@ -9,6 +9,7 @@ const timezone = process.env.APP_TIMEZONE || 'Asia/Kolkata';
 process.env.TZ = timezone;
 
 const mongoUri = process.env.MONGO_URI || '';
+const mongoDnsServers = (process.env.MONGO_DNS_SERVERS || '').split(',').map((server) => server.trim()).filter(Boolean);
 /**
  * "Local demo mode": no MONGO_URI (embedded database) and not production. Only in this mode
  * do the convenient-but-unsafe defaults switch on (dev JWT secret, demo seed data, demo
@@ -53,6 +54,7 @@ export const config = {
   timezone,
   port: Number(process.env.PORT || 4600),
   mongoUri,
+  mongoDnsServers,
   localDemo,
   jwtSecret,
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
