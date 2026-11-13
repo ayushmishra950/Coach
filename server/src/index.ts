@@ -65,6 +65,13 @@ app.use('/api/settings', settings);
 app.use('/api/parent', parent);
 app.use('/api/admin', admin);
 app.use('/api/chat', chat);
+app.get('/api/health', (_req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'CoachFlow server is running',
+    timestamp: new Date().toISOString()
+  });
+});
 app.use('/api', (_req, res) => res.status(404).json({ message: 'Not found' }));
 
 // Serve the built React app in production
