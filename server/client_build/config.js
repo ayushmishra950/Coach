@@ -1,0 +1,73 @@
+import 'dotenv/config';
+const isProd = process.env.NODE_ENV === 'production';
+// All "today", due-date and attendance-date logic runs in the institute's local time zone,
+// not in whatever zone the server happens to be deployed in (most clouds default to UTC).
+// Node picks up a change to process.env.TZ at runtime, so this must stay at the top.
+const timezone = process.env.APP_TIMEZONE || 'Asia/Kolkata';
+process.env.TZ = timezone;
+const mongoUri = process.env.MONGO_URI || '';
+const mongoDnsServers = (process.env.MONGO_DNS_SERVERS || '').split(',').map((server) => server.trim()).filter(Boolean);
+/**
+ * "Local demo mode": no MONGO_URI (embedded database) and not production. Only in this mode
+ * do the convenient-but-unsafe defaults switch on (dev JWT secret, demo seed data, demo
+ * payments, one-click demo logins). A real database or NODE_ENV=production turns them all off.
+ */
+const localDemo = !isProd && !mongoUri;
+if (isProd && !mongoUri) {
+    throw new Error('MONGO_URI must be set in production. The embedded database is for local development only (no auth, no backups).');
+}
+const DEV_SECRET = 'coachflow-dev-secret-change-me';
+// Trim and drop surrounding quotes — a common copy-paste slip in hosting dashboards.
+const envSecret = (process.env.JWT_SECRET || '').trim().replace(/^["']|["']$/g, '');
+const strongSecret = envSecret.length >= 32 && !envSecret.startsWith('change-this');
+if (envSecret && !strongSecret) {
+    console.warn(`⚠  JWT_SECRET is set but too weak (${envSecret.length} characters, need 32+) — it is ignored.`);
+}
+/**
+ * The key that signs login tokens:
+ *  - JWT_SECRET from the environment when it is strong (recommended), else
+ *  - local demo mode: a fixed development key, else
+ *  - a random key generated once and stored in the database (see ensureJwtSecret in db.ts),
+ *    so a live server still starts safely and logins survive restarts.
+ */
+const jwtSecret = strongSecret ? envSecret : localDemo ? DEV_SECRET : '';
+if (!strongSecret && localDemo)
+    console.warn('⚠  Using the built-in development JWT secret (local demo mode). Set JWT_SECRET before going live.');
+const flag = (name, fallback) => (process.env[name] ? process.env[name] === 'true' : fallback);
+if (isProd && !process.env.TRUST_PROXY) {
+    console.warn('⚠  TRUST_PROXY is not set. Behind Nginx / a load balancer / Cloudflare set it to the number of proxy hops (1, 2, …) or "true" (= 1), otherwise every visitor shares one IP and rate limits misfire.');
+}
+if (isProd && flag('SEED_ON_EMPTY', false)) {
+    throw new Error('SEED_ON_EMPTY=true loads public demo passwords and is not allowed in production. Remove it.');
+}
+/** Express "trust proxy" setting: number of proxy hops (0 = off). TRUST_PROXY=true means 1. */
+const trustHops = process.env.TRUST_PROXY === 'true' ? 1 : Number.isInteger(Number(process.env.TRUST_PROXY)) && process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) : 0;
+export const config = {
+    isProd,
+    timezone,
+    port: Number(process.env.PORT || 4600),
+    mongoUri,
+    mongoDnsServers,
+    localDemo,
+    jwtSecret,
+    clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+    /** CLIENT_URL split into trimmed origins. */
+    clientOrigins: (process.env.CLIENT_URL || 'http://localhost:5173').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean),
+    /**
+     * Seed the demo institute into an EMPTY database. On by default only in local demo mode; on a
+     * live server only when SEED_ON_EMPTY=true is set explicitly (e.g. a demo / sales site).
+     */
+    seedOnEmpty: flag('SEED_ON_EMPTY', localDemo),
+    /** Show one-click demo logins on the Login page. */
+    demoLogins: flag('DEMO_LOGINS', localDemo) && !isProd,
+    /**
+     * Demo payments complete instantly without a gateway. They are ON only in local demo mode
+     * and never in production, so nobody can get a free upgrade or mark a fee as paid on a
+     * live site before Razorpay is connected.
+     */
+    demoPayments: flag('DEMO_PAYMENTS', localDemo) && !isProd,
+    /** Behind Nginx / a load balancer, set TRUST_PROXY=true so rate limits see the real client IP. */
+    trustProxy: trustHops,
+    /** Days a paid plan keeps working after its period ends, before falling back to Starter. */
+    graceDays: Number.isFinite(Number(process.env.BILLING_GRACE_DAYS)) && process.env.BILLING_GRACE_DAYS ? Number(process.env.BILLING_GRACE_DAYS) : 3,
+};
