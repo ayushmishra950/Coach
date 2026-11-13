@@ -1,0 +1,10 @@
+{
+  "name": "CoachFlow",
+  "short_name": "CoachFlow",
+  "description": "Coaching institute management — students, attendance, fees, tests and parents.",
+  "start_url": "/login",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "icons": [{ "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

@@ -68,7 +68,7 @@ app.use('/api/chat', chat);
 app.use('/api', (_req, res) => res.status(404).json({ message: 'Not found' }));
 
 // Serve the built React app in production
-const clientDist = path.resolve(process.cwd(), '../client/dist');
+const clientDist = path.resolve(process.cwd(), '../server/client_build');
 if (fs.existsSync(clientDist)) {
   app.use(staticGzip(clientDist));
   // Hashed build files never change → cache for a year; index.html is always re-checked.
