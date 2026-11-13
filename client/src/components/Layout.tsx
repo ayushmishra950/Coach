@@ -16,9 +16,9 @@ interface NavItem { to: string; label: string; icon: LucideIcon; end?: boolean; 
 
 const OWNER_NAV: NavItem[] = [
   { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/app/students', label: 'Students', icon: GraduationCap, section: 'Manage' },
-  { to: '/app/teachers', label: 'Teachers', icon: UserSquare2 },
+  { to: '/app/teachers', label: 'Teachers', icon: UserSquare2, section: 'Manage' },
   { to: '/app/batches', label: 'Batches', icon: BookOpen },
+   { to: '/app/students', label: 'Students', icon: GraduationCap },
   { to: '/app/attendance', label: 'Attendance', icon: CalendarCheck, section: 'Daily work' },
   { to: '/app/fees', label: 'Fees', icon: IndianRupee },
   { to: '/app/tests', label: 'Tests & Marks', icon: ClipboardList },
