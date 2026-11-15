@@ -7,6 +7,8 @@ import { createOrder, fetchOrder, platformCreds, verifySignature } from '../serv
 import type { InstituteDoc } from '../models/index.js';
 import { effectivePlanKey, nextPeriodEnd, trialDaysLeft } from '../services/plan.js';
 import { audit } from '../services/audit.js';
+import { emitToInstitute } from '../services/realtime.js';
+import { upiEnabled } from '../services/upi.js';
 import { HttpError, ah, oid, required, str } from '../utils/http.js';
 import { pageParams, paged } from '../utils/paginate.js';
 
@@ -33,7 +35,9 @@ r.get(
       currentPeriodEnd: inst.currentPeriodEnd,
       cancelAtPeriodEnd: !!inst.cancelAtPeriodEnd,
       usage: { students, teachers },
-      paymentsEnabled: config.demoPayments || !!platformCreds(),
+      paymentsEnabled: config.demoPayments || !!platformCreds() || upiEnabled(),
+      // Pay by UPI QR (pure-upi), verified by the Super Admin — shown next to card payment when set up.
+      upi: upiEnabled() ? { upiId: config.upi.id, payeeName: config.upi.name } : null,
       gateway: platformCreds() ? 'razorpay' : config.demoPayments ? 'demo' : null,
       plans,
       history,
@@ -61,6 +65,8 @@ async function activate(inst: InstituteDoc, planKey: string, cycle: 'monthly' | 
   const end = nextPeriodEnd(inst.status === 'active' || inst.status === 'past_due' ? inst.currentPeriodEnd : null, cycle);
   inst.set({ plan: planKey, billingCycle: cycle, status: 'active', currentPeriodEnd: end, cancelAtPeriodEnd: false });
   await inst.save();
+  // Teachers' and parents' open screens pick up the new plan's features live.
+  emitToInstitute(inst._id, 'institute:updated', { plan: planKey, status: 'active' });
   return end;
 }
 

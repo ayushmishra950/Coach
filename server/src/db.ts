@@ -27,7 +27,20 @@ export async function connectDB() {
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
   }
-  await mongoose.connect(uri);
+  try {
+    await mongoose.connect(uri);
+  } catch (err) {
+    // mongodb+srv:// needs a DNS lookup (SRV record). On some networks the DNS server in MONGO_DNS_SERVERS, or the
+    // router's, can't answer it (querySrv ETIMEOUT / ECONNREFUSED). Try once more with public DNS.
+    const e = err as NodeJS.ErrnoException & { syscall?: string };
+    if (!uri.startsWith('mongodb+srv://') || !/^query(Srv|Txt)$/.test(e?.syscall ?? '')) throw err;
+    const fallback = ['8.8.8.8', '1.1.1.1'];
+    console.warn(`⚠  DNS lookup for MongoDB failed (${e.code} via ${dns.getServers().join(', ') || 'system DNS'}). Retrying with ${fallback.join(', ')}…`);
+    dns.setServers(fallback);
+    await mongoose.disconnect().catch(() => undefined);
+    await mongoose.connect(uri);
+    console.warn(`   Connected using public DNS. Set MONGO_DNS_SERVERS=${fallback.join(',')} in server/.env to skip this retry.`);
+  }
   console.log('✓ MongoDB connected');
 }
 

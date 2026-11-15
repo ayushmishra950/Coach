@@ -9,6 +9,7 @@ import {
 } from 'recharts';
 import { Button, Card, CardHeader, ChartTooltip, ErrorState, PageHeader, Skeleton, StatCard, clsx } from '../../components/ui';
 import { useApi } from '../../hooks/useApi';
+import { UpiPendingBanner } from '../../components/UpiAdminAlerts';
 import { inr, inrShort } from '../../lib/format';
 
 const PALETTE = ['#6366f1', '#8b5cf6', '#ec4899', '#10b981', '#f59e0b', '#0ea5e9'];
@@ -75,6 +76,7 @@ export default function AdminDashboard() {
         subtitle="Live SaaS metrics across every CoachFlow institute."
         actions={<Button variant="secondary" icon={<RefreshCw className="h-4 w-4" />} loading={loading} onClick={reload}>Refresh</Button>}
       />
+      <UpiPendingBanner />
 
       {/* Hero banner */}
       <div className="relative mb-6 overflow-hidden rounded-3xl bg-gradient-to-br from-brand-600 via-violet-600 to-fuchsia-600 p-6 text-white shadow-glow sm:p-8">

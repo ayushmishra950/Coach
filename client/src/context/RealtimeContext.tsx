@@ -19,19 +19,21 @@ interface RealtimeCtx {
 const Ctx = createContext<RealtimeCtx>({ socket: null, connected: false, chatUnread: 0, setChatUnread: () => {}, refreshUnread: () => {} });
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
-  const { session } = useAuth();
+  const { session, refresh } = useAuth();
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
 
   const role = session?.user.role;
   const userId = session?.user.id;
-  const enabled = !!userId && role !== 'superadmin';
+  // Super Admins connect too (live UPI payment alerts) — they just have no chat.
+  const enabled = !!userId;
+  const hasChat = enabled && role !== 'superadmin';
 
   const refreshUnread = useCallback(() => {
-    if (!enabled) return;
+    if (!hasChat) return;
     api.get<{ total: number }>('/chat/unread').then(({ data }) => setChatUnread(data.total)).catch(() => {});
-  }, [enabled]);
+  }, [hasChat]);
 
   useEffect(() => {
     if (!enabled) {
@@ -74,6 +76,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     s.on('disconnect', onDisconnect);
     s.on('connect_error', onConnectError);
     s.on('chat:unread', onUnread);
+    // Super Admin changed the plan / trial / status → reload the session so features unlock or lock live.
+    s.on('institute:updated', () => { void refresh(); });
     s.on('chat:message', onUnread);
     setSocket(s);
     };

@@ -10,10 +10,11 @@ import { useRealtime } from '../context/RealtimeContext';
 import type { FeatureKey } from '../lib/types';
 import { Logo } from './Logo';
 import { NotificationBell } from './NotificationBell';
+import { UpiAdminListener, useUpiPendingCount } from './UpiAdminAlerts';
 import { Avatar, Button, Modal, clsx } from './ui';
 import { FEATURE_INFO } from '../lib/features';
 
-interface NavItem { to: string; label: string; icon: LucideIcon; end?: boolean; feature?: FeatureKey; section?: string; chatBadge?: boolean }
+interface NavItem { to: string; label: string; icon: LucideIcon; end?: boolean; feature?: FeatureKey; section?: string; chatBadge?: boolean; upiBadge?: boolean }
 
 const OWNER_NAV: NavItem[] = [
   { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -63,7 +64,7 @@ const TEACHER_NAV: NavItem[] = [
 const ADMIN_NAV: NavItem[] = [
   { to: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/admin/institutes', label: 'Institutes', icon: Building2, section: 'Customers' },
-  { to: '/admin/payments', label: 'Payments', icon: CreditCard },
+  { to: '/admin/payments', label: 'Payments', icon: CreditCard, upiBadge: true },
   { to: '/admin/tickets', label: 'Support', icon: LifeBuoy },
   { to: '/admin/plans', label: 'Plans & Pricing', icon: Crown, section: 'Configuration' },
   { to: '/admin/audit', label: 'Audit log', icon: ScrollText },
@@ -75,6 +76,7 @@ function Sidebar({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => v
   const { chatUnread } = useRealtime();
   const inst = session?.institute;
   const isAdmin = session?.user.role === 'superadmin';
+  const upiPending = useUpiPendingCount(isAdmin);
   return (
     <div className="flex h-full flex-col">
       <div className="px-5 pb-4 pt-5">
@@ -105,6 +107,9 @@ function Sidebar({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => v
               <it.icon className="h-[18px] w-[18px]" />
               <span className="flex-1">{it.label}</span>
               {it.feature && !hasFeature(it.feature) && <Crown className="h-3.5 w-3.5 text-amber-300" />}
+              {it.upiBadge && upiPending > 0 && (
+                <span title={`${upiPending} UPI payment${upiPending === 1 ? '' : 's'} to verify`} className="grid h-5 min-w-5 place-items-center rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-900">{upiPending > 99 ? '99+' : upiPending}</span>
+              )}
               {it.chatBadge && chatUnread > 0 && (
                 <span className="grid h-5 min-w-5 place-items-center rounded-full bg-rose-500 px-1.5 text-[10px] font-bold text-white">{chatUnread > 99 ? '99+' : chatUnread}</span>
               )}
@@ -230,6 +235,7 @@ export function Shell({ variant }: { variant: 'app' | 'admin' }) {
         </main>
       </div>
       {variant === 'app' && <UpgradeListener />}
+      {variant === 'admin' && <UpiAdminListener />}
     </div>
   );
 }

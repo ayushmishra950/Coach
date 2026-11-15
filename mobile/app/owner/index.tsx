@@ -27,7 +27,7 @@ export default function OwnerHome() {
   const leaves = useFetch<{ pending: number }>('/academics/leaves', { status: 'pending' });
   const reports = useFetch<{ unseen: number }>('/work-reports', { status: 'unseen' });
   // New enquiries, payments, check-ins and reports appear without pulling down.
-  usePoll(() => { d.reload(); staff.reload(); leads.reload(); leaves.reload(); reports.reload(); });
+  usePoll(() => { d.reload(); staff.reload(); leads.reload(); leaves.reload(); reports.reload(); }, ['notification:new', 'lead:new', 'staff:attendance', 'report:new']);
 
   const refresh = () => { d.onRefresh(); staff.reload(); sal.reload(); leads.reload(); leaves.reload(); };
   if (d.loading && !d.data) return <Loading />;

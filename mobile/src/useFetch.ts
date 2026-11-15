@@ -1,6 +1,7 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { errMsg, get, type Paged } from './api';
+import { useLiveEvent, useRealtime, type LiveEvent } from './realtime';
 
 type Query = Record<string, string | number | boolean | undefined | null>;
 
@@ -139,14 +140,18 @@ export function usePaged<T, Extra extends object = object>(path: string | null, 
 }
 
 /**
- * The app has no live socket: while a screen is open, re-check every `ms` (default 30 s) so
- * new enquiries, payments and reports show up without pulling to refresh.
+ * Keeps a screen live: reloads when one of `events` arrives over the socket and when the app
+ * comes back to the foreground. While the live connection is down it falls back to checking
+ * every `ms` (default 30 s) as long as the screen is open.
  */
-export function usePoll(fn: () => void, ms = 30_000) {
+export function usePoll(fn: () => void, events: LiveEvent[] = ['notification:new'], ms = 30_000) {
   const ref = useRef(fn);
   ref.current = fn;
+  const { connected } = useRealtime();
+  useLiveEvent([...events, 'app:resume'], () => ref.current());
   useFocusEffect(useCallback(() => {
+    if (connected) return;
     const t = setInterval(() => ref.current(), ms);
     return () => clearInterval(t);
-  }, [ms]));
+  }, [ms, connected]));
 }

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { addDays, fmtClock, fmtDay, fmtMins, ymd } from '../src/format';
 import { Pager, useClientPage } from '../src/Pager';
-import { useFetch } from '../src/useFetch';
+import { useFetch, usePoll } from '../src/useFetch';
 import { Avatar, Badge, Button, C, Card, ErrorView, Grid, Loading, P, Row, Screen, Stat, type Tone } from '../src/ui';
 
 interface Item {
@@ -16,8 +16,10 @@ interface Day { date: string; isToday: boolean; items: Item[]; summary: { total:
 /** Owner: teachers' check-in / check-out for a day. */
 export default function Staff() {
   const [date, setDate] = useState(ymd());
-  const { data, error, loading, refreshing, onRefresh } = useFetch<Day>('/staff-attendance/day', { date });
+  const { data, error, loading, refreshing, onRefresh, reload } = useFetch<Day>('/staff-attendance/day', { date });
   const page = useClientPage(data?.items, date);
+  // Check-ins / check-outs appear the moment a teacher taps the button.
+  usePoll(() => reload(), ['staff:attendance']);
   if (loading && !data) return <Loading />;
   if (error && !data) return <ErrorView message={error} onRetry={onRefresh} />;
   const d = data!;

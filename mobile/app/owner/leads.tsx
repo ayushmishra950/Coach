@@ -16,7 +16,7 @@ export default function OwnerLeads() {
   const [q, setQ] = useState('');
   const list = usePaged<Lead>('/leads', { status: filter === 'all' ? undefined : filter, search: q || undefined });
   // Website enquiries / demo bookings show up within 30 s while this screen is open.
-  usePoll(() => list.reload());
+  usePoll(() => list.reload(), ['lead:new']);
   const [add, setAdd] = useState(false);
 
   return (

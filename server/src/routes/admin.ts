@@ -7,7 +7,7 @@ import { Attendance, AuditLog, Batch, FEATURE_KEYS, Institute, Notification, Pay
 import { audit as auditLog } from '../services/audit.js';
 import { notify } from '../services/notify.js';
 import { effectivePlanKey, invalidatePlanCache, monthlyValue, nextPeriodEnd } from '../services/plan.js';
-import { disconnectInstitute, disconnectUser } from '../services/realtime.js';
+import { disconnectInstitute, disconnectUser, emitToInstitute } from '../services/realtime.js';
 import { monthKey } from '../utils/dates.js';
 import { escapeRegex, generatePassword } from '../utils/security.js';
 import { HttpError, ah, oid, str } from '../utils/http.js';
@@ -165,6 +165,7 @@ r.put(
       lengthEnd = n === 0 ? new Date() : new Date(joined.getTime() + n * 86400000);
     }
     const before = `${inst.plan}/${inst.status}`;
+    const beforeSnap = snap(inst);
     if (plan) inst.plan = plan;
     if (status === 'cancelled' && inst.status !== 'cancelled') inst.cancelledAt = new Date();
     if (status && status !== 'cancelled') inst.cancelAtPeriodEnd = false;
@@ -209,10 +210,62 @@ r.put(
       });
     }
     if (inst.status === 'suspended') disconnectInstitute(inst._id);
+    else await announceAccountChange(inst, beforeSnap, { paidAmount: offlinePayment?.amount ? Math.round(Number(offlinePayment.amount)) : undefined });
     auditLog(req, 'institute.update', 'Institute', inst._id, `${before} → ${inst.plan}/${inst.status}${trialChanged ? ` · trial ends ${inst.trialEndsAt ? inst.trialEndsAt.toLocaleDateString('en-IN') : '—'}` : ''}${offlinePayment?.amount ? ` · offline ₹${offlinePayment.amount}` : ''}`, inst._id);
     res.json(inst);
   }),
 );
+
+/**
+ * Tells the coaching owner what the Super Admin changed on their account — a live in-app
+ * notification (bell + toast), plus email when a provider is set — and makes every open
+ * screen of that institute (owner, teachers, parents; web and app) reload its plan.
+ */
+type Snapshot = { plan: string; status: string; trialEndsAt?: Date | null; currentPeriodEnd?: Date | null };
+const snap = (i: InstituteDoc): Snapshot => ({ plan: i.plan, status: i.status, trialEndsAt: i.trialEndsAt, currentPeriodEnd: i.currentPeriodEnd });
+const dmy = (d?: Date | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+
+async function announceAccountChange(inst: InstituteDoc, before: Snapshot, extra?: { paidAmount?: number }) {
+  const after = snap(inst);
+  const planName = async (k: string) => (await Plan.findOne({ key: k }).select('name').lean())?.name ?? k;
+  const msgs: { title: string; message: string }[] = [];
+  const nowActive = after.status === 'active';
+  if (nowActive && (before.status !== 'active' || before.plan !== after.plan)) {
+    const name = await planName(after.plan);
+    msgs.push({
+      title: `🎉 ${name} plan activated`,
+      message: `CoachFlow has approved your ${name} plan${after.currentPeriodEnd ? ` — valid till ${dmy(after.currentPeriodEnd)}` : ''}.${extra?.paidAmount ? ` Payment of ₹${extra.paidAmount.toLocaleString('en-IN')} recorded.` : ''} All ${name} features are unlocked now.`,
+    });
+  } else if (before.plan !== after.plan) {
+    const name = await planName(after.plan);
+    msgs.push({ title: `Plan changed to ${name}`, message: `Your CoachFlow plan is now ${name}${after.status === 'trial' ? ' (trial)' : ''}.` });
+  }
+  if (String(before.trialEndsAt ?? '') !== String(after.trialEndsAt ?? '') && !nowActive) {
+    const live = after.trialEndsAt && after.trialEndsAt > new Date();
+    msgs.push(live
+      ? { title: 'Free trial updated', message: `Your free Premium trial now runs till ${dmy(after.trialEndsAt)} (${Math.ceil((after.trialEndsAt!.getTime() - Date.now()) / 86400000)} days left).` }
+      : { title: 'Free trial ended', message: 'Your free trial has ended. Starter features stay on — choose a plan on the Subscription page to unlock everything again.' });
+  }
+  if (before.status !== after.status && !msgs.length) {
+    const text: Record<string, string> = {
+      cancelled: 'Your CoachFlow subscription was cancelled. Your data is safe — choose a plan any time to continue.',
+      past_due: 'Your CoachFlow plan payment is due. Please renew from the Subscription page to keep all features.',
+      trial: 'Your account is on a free trial.',
+      active: 'Your CoachFlow subscription is active.',
+    };
+    if (text[after.status]) msgs.push({ title: 'Subscription updated', message: text[after.status] });
+  }
+  // Every open screen re-reads the plan right away (features unlock / lock without logging out).
+  emitToInstitute(inst._id, 'institute:updated', { plan: after.plan, status: after.status });
+  if (!msgs.length) return;
+  const owner = await User.findOne({ instituteId: inst._id, role: 'owner', active: true }).sort({ createdAt: 1 }).select('email phone').lean();
+  for (const m of msgs) {
+    await notify({
+      institute: inst, type: 'system', audience: 'owner', ...m, href: '/app/subscription',
+      contact: { email: owner?.email, phone: owner?.phone ?? undefined }, emailOwner: true,
+    }).catch((e) => console.error('[admin-notify]', (e as Error).message));
+  }
+}
 
 /* ── Suspend / reactivate ────────────────────────────────────────────
  * Suspending blocks everyone of that institute — owner, teachers and parents — from logging
@@ -265,6 +318,10 @@ r.post(
     clearSuspension(inst);
     await inst.save();
     await audit(req, inst, 'institute.reactivate');
+    notify({
+      institute: inst, type: 'system', audience: 'owner', title: 'Account reactivated',
+      message: 'Your CoachFlow account is active again. Teachers and parents can log in as before.', href: '/app/subscription',
+    }).catch(() => undefined);
     res.json({ institute: inst });
   }),
 );

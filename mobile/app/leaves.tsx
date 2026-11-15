@@ -4,7 +4,7 @@ import { Alert, FlatList, Linking, RefreshControl, Text, View } from 'react-nati
 import { errMsg, put } from '../src/api';
 import { fmtDate, telUrl, timeAgo } from '../src/format';
 import { Pager } from '../src/Pager';
-import { usePaged } from '../src/useFetch';
+import { usePaged, usePoll } from '../src/useFetch';
 import { Badge, Button, C, Card, Chips, Empty, ErrorView, Input, Loading, P, Row, Sheet, s, type Tone } from '../src/ui';
 
 interface Leave {
@@ -18,6 +18,7 @@ const days = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)
 export default function Leaves() {
   const [filter, setFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
   const list = usePaged<Leave>('/academics/leaves', { status: filter === 'all' ? undefined : filter });
+  usePoll(() => list.reload());
   const [review, setReview] = useState<{ l: Leave; status: 'approved' | 'rejected' } | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);

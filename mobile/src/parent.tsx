@@ -1,7 +1,7 @@
 import { ScrollView } from 'react-native';
 import { useAuth } from './auth';
 import type { Invoice } from './CollectSheet';
-import { useFetch } from './useFetch';
+import { useFetch, usePoll } from './useFetch';
 import { Chips } from './ui';
 
 export interface Result {
@@ -31,6 +31,8 @@ export interface Overview {
 export function useParent() {
   const { childId, setChildId } = useAuth();
   const f = useFetch<Overview>('/parent/overview');
+  // Attendance marked, results published, fee paid, notice posted → the parent screens update live.
+  usePoll(() => f.reload());
   const children = f.data?.children ?? [];
   const child = children.find((c) => c.student._id === childId) ?? children[0] ?? null;
   return { ...f, child, children, setChildId };

@@ -11,7 +11,11 @@ Ye app wahi server (`../server`) use karta hai jo website use karti hai — alag
 
 **Parent** — Home (attendance %, latest result, fees, next class, notice board, holidays, announcements, syllabus progress) · Results + rank + class average + report card · Fees online pay (Razorpay) + receipts · Online test dena + result review · Study material (PDF/notes/links) · Leave apply/cancel · Ek se zyada bachche ho to upar se switch
 
-Har list 20-20 karke aati hai — neeche **Previous / Next** buttons. Owner ki Enquiries / Dashboard har 30 sec me khud update hoti hai.
+Har list 20-20 karke aati hai — neeche **Previous / Next** buttons.
+
+**Live (Socket.IO):** app server se live judta hai (website wala hi socket). Nayi enquiry, fee payment, teacher check-in, work report, notice, result — turant upar banner aata hai aur screen khud update hoti hai. Super Admin plan approve kare to features turant khul jaate hain. Connection toote to har 30 sec me khud check karta hai. (App band hone par phone notification — push — abhi nahi hai.)
+
+`socket.io-client` naya package hai — `npm install` ek baar phir chalana.
 
 ## Chalane ka tareeka (PC + phone, same Wi-Fi)
 
@@ -48,7 +52,7 @@ eas build:configure
 eas build -p android --profile preview     # installable APK
 eas build -p android --profile production  # Play Store (.aab)
 ```
-Build se pehle `app.json` me `extra.apiUrl` ko apne live server (https://…) pe set kar do.
+Build se pehle `app.json` me `extra.apiUrl` ko apne live server (https://…) pe set kar do. APK me `http://` (bina https) server Android block karta hai — live server https par hi rakho.
 
 ## Online payment (Parent)
 

@@ -5,7 +5,7 @@ import { errMsg, post } from '../../src/api';
 import { CollectSheet, type Invoice } from '../../src/CollectSheet';
 import { fmtDate, inr, inrShort, waUrl } from '../../src/format';
 import { Pager } from '../../src/Pager';
-import { useFetch, usePaged } from '../../src/useFetch';
+import { useFetch, usePaged, usePoll } from '../../src/useFetch';
 import { Badge, Button, C, Card, Chips, Empty, ErrorView, Grid, ListItem, Loading, Row, Stat, s } from '../../src/ui';
 
 interface Summary { total: number; collected: number; pending: number; overdue: number; overdueStudents: number; collectedThisMonth: number; paymentsThisMonth: number }
@@ -16,6 +16,8 @@ export default function OwnerFees() {
   const sum = useFetch<Summary>('/fees/summary');
   const [filter, setFilter] = useState<Filter>('overdue');
   const list = usePaged<Inv>('/fees/invoices', { status: filter });
+  // Online fee payments by parents show up live.
+  usePoll(() => { list.reload(); sum.reload(); });
   const [collect, setCollect] = useState<Inv | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 

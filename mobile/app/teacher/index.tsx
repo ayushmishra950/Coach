@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { CheckInCard } from '../../src/CheckIn';
 import { fmtDate, fmtTime, greeting } from '../../src/format';
-import { useFetch } from '../../src/useFetch';
+import { useFetch, usePoll } from '../../src/useFetch';
 import { Badge, Banner, Card, ErrorView, Grid, H1, H2, ListItem, Loading, P, Screen, Stat } from '../../src/ui';
 
 interface TeacherDash {
@@ -18,6 +18,7 @@ export default function TeacherToday() {
   const { session } = useAuth();
   const d = useFetch<TeacherDash>('/dashboard');
   const leaves = useFetch<{ pending: number }>('/academics/leaves', { status: 'pending' });
+  usePoll(() => { d.reload(); leaves.reload(); report.reload(); });
   const report = useFetch<{ report: { seenAt?: string | null; ownerComment?: string } | null }>('/work-reports/me/today');
   if (d.loading && !d.data) return <Loading />;
   if (d.error && !d.data) return <ErrorView message={d.error} onRetry={d.onRefresh} />;

@@ -37,6 +37,18 @@ export function emitToInstituteRole(instituteId: unknown, role: 'owner' | 'teach
   io?.to(`inst:${String(instituteId)}:${role}`).emit(event, payload);
 }
 
+/** Live event to every signed-in Super Admin (e.g. a UPI plan payment waiting for verification). */
+export function emitToSuperadmins(event: string, payload: unknown) {
+  io?.to('superadmins').emit(event, payload);
+}
+
+/** Live event to everyone of one institute (owners, teachers and parents). */
+export function emitToInstitute(instituteId: unknown, event: string, payload: unknown) {
+  if (!io) return;
+  const i = String(instituteId);
+  io.to(`inst:${i}:owner`).to(`inst:${i}:teacher`).to(`inst:${i}:parent`).emit(event, payload);
+}
+
 /** Pushes a freshly created in-app notification to everyone who should see it. */
 export function emitNotification(n: {
   _id: unknown; instituteId?: unknown; audience: string; studentId?: unknown; userId?: unknown;
@@ -80,8 +92,14 @@ const toId = (v: unknown) => {
   return new Types.ObjectId(v);
 };
 
-async function checkAccess(ctx: Ctx) {
+/** Super Admins connect only for live platform alerts (UPI payments to verify) — never for chat. */
+async function checkChat(ctx: Ctx) {
   if (ctx.user.role === 'superadmin') throw new HttpError(403, 'Chat is not available for this account');
+  return checkAccess(ctx);
+}
+
+async function checkAccess(ctx: Ctx) {
+  if (ctx.user.role === 'superadmin') return ctx;
   if (ctx.user.role === 'parent' && !(await hasFeature(ctx.institute!, 'parentPortal'))) {
     throw new HttpError(402, NOT_ENABLED);
   }
@@ -126,6 +144,15 @@ function onConnection(socket: Socket) {
   const { user } = socket.data.ctx as Ctx;
   const uid = String(user.id);
   void socket.join(`user:${uid}`);
+  if (user.role === 'superadmin') {
+    // Platform alerts only: no institute rooms, presence or chat.
+    void socket.join('superadmins');
+    const recheckAdmin = setInterval(() => {
+      authenticateToken(socket.data.token as string | undefined).catch(() => socket.disconnect(true));
+    }, 10 * 60_000);
+    socket.on('disconnect', () => clearInterval(recheckAdmin));
+    return;
+  }
   if (user.instituteId) {
     void socket.join(`inst:${String(user.instituteId)}:${user.role}`);
     if (user.role === 'parent') for (const s of user.studentIds) void socket.join(`student:${String(s)}`);
@@ -137,7 +164,7 @@ function onConnection(socket: Socket) {
 
   // Re-check the session on every action — the account may have been disabled, the
   // institute suspended or the token may have expired since the socket connected.
-  const fresh = async () => checkAccess(await authenticateToken(socket.data.token as string | undefined));
+  const fresh = async () => checkChat(await authenticateToken(socket.data.token as string | undefined));
 
   socket.on('chat:send', async (payload: { conversationId?: string; text?: string; clientId?: string }, ack?: Ack) => {
     const reply: Ack = typeof ack === 'function' ? ack : () => {};

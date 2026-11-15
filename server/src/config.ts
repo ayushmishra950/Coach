@@ -82,6 +82,14 @@ export const config = {
     keyId: (process.env.RAZORPAY_KEY_ID || '').trim(),
     keySecret: (process.env.RAZORPAY_KEY_SECRET || '').trim(),
   },
+  /**
+   * Plan payments by UPI QR straight to CoachFlow's UPI ID (pure-upi), verified by the Super Admin.
+   * UPI_ID empty = off. A business / merchant UPI ID is recommended.
+   */
+  upi: {
+    id: (process.env.UPI_ID || '').trim(),
+    name: (process.env.UPI_NAME || 'CoachFlow').trim(),
+  },
   /** Message providers. Leave empty to keep a channel "queued" (in-app always works). */
   whatsapp: {
     token: (process.env.WHATSAPP_TOKEN || '').trim(),

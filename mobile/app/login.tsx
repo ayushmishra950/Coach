@@ -10,7 +10,6 @@ export default function Login() {
   const { login, session } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [serverOpen, setServerOpen] = useState(false);
@@ -61,12 +60,7 @@ export default function Login() {
           <View style={{ flex: 1, backgroundColor: C.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24 }}>
             {error ? <Banner tone="red" icon="alert-circle">{error}</Banner> : null}
             <Input label="Email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="email" placeholder="you@example.com" />
-            <View>
-              <Input label="Password" value={password} onChangeText={setPassword} secureTextEntry={!show} placeholder="Password" onSubmitEditing={submit} returnKeyType="go" />
-              <Pressable onPress={() => setShow(!show)} style={{ position: 'absolute', right: 14, top: 36 }} hitSlop={10}>
-                <Icon name={show ? 'eye-off-outline' : 'eye-outline'} />
-              </Pressable>
-            </View>
+            <Input label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="Password" onSubmitEditing={submit} returnKeyType="go" />
             <Button title="Sign in" onPress={submit} loading={busy} style={{ marginTop: 4 }} />
 
             <Pressable onPress={() => setServerOpen(!serverOpen)} style={{ marginTop: 28, flexDirection: 'row', alignItems: 'center', gap: 6 }}>

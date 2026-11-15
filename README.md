@@ -117,6 +117,7 @@ server address to your PC's Wi-Fi IP (`http://<ip>:4600`). Parents pay fees thro
 | `DEMO_PAYMENTS` | on in dev, off in prod | Demo checkout / Pay Now. Keep off on a live site until Razorpay is connected. |
 | `TRUST_PROXY` | `0` | Number of proxy hops in front of the API (`true` = 1). Set it behind Nginx / a load balancer / Cloudflare (Cloudflare + Nginx = 2) so rate limits see real client IPs. |
 | `BILLING_GRACE_DAYS` | `3` | Days a paid plan keeps working after its period ends before falling back to Starter. |
+| `UPI_ID` / `UPI_NAME` | off / `CoachFlow` | Plan payments by **UPI QR** straight to this UPI ID (no gateway fees). See *Plan payments by UPI* below. |
 
 ## Billing rules
 
@@ -124,6 +125,20 @@ server address to your PC's Wi-Fi IP (`http://<ip>:4600`). Parents pay fees thro
 - Renewing early adds the new period on top of the remaining days.
 - A Super Admin who sets an institute to **Active** by hand (e.g. after an offline payment) starts a fresh billing period.
 - Super Admin → Institutes → Manage can generate a new password for an owner who forgot theirs.
+
+## Plan payments by UPI (`pure-upi`)
+
+Set `UPI_ID` (a business / merchant UPI ID is best) and `UPI_NAME` in `server/.env`. Owners then get **Pay by UPI QR**
+on Subscription, next to Razorpay (or on its own):
+
+1. The owner picks a plan; the server creates an order with a **unique amount** (₹999 → e.g. ₹999.37) and a QR.
+2. The owner pays from any UPI app and enters the 12-digit **UTR**.
+3. Super Admin → Payments → **UPI QR payments**: find that exact amount + UTR in your bank app, then **Approve**
+   (the plan switches on, a payment row is added and the owner is notified) or **Reject** with a reason.
+
+Code: `server/src/services/upi.ts` (plans from MongoDB, plan-limit checks, activation), `server/src/routes/upi.ts`
+(`/api/upi`), `client/src/components/UpiPayModal.tsx` and `UpiVerifyCard.tsx`. Orders are kept in the `upi_orders`
+collection (a UTR can be used only once). Send yourself ₹1 to the UPI ID before going live.
 
 ## Production build
 

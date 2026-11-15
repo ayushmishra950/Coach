@@ -3,7 +3,7 @@ import { useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Logo } from '../components/Logo';
-import { Button } from '../components/ui';
+import { Button, PasswordInput } from '../components/ui';
 import { homeFor, useAuth } from '../context/AuthContext';
 import { NOTICE_KEY, errMsg } from '../lib/api';
 
@@ -123,8 +123,8 @@ export default function Login() {
             <label className="block">
               <span className="label">Password</span>
               <div className="relative">
-                <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input className="input pl-10" type="password" required autoComplete="current-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+                <Lock className="pointer-events-none absolute left-3.5 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <PasswordInput className="pl-10" required autoComplete="current-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
               </div>
             </label>
             <Button type="submit" className="w-full py-3" loading={busy === 'form'} disabled={!!busy}>

@@ -179,6 +179,8 @@ export interface NotifyInput {
   contact?: { phone?: string; email?: string };
   /** In-app only (e.g. the same family was already messaged for a sibling). */
   skipExternal?: boolean;
+  /** Platform messages to the owner (plan approved, trial changed…) also go to contact.email. */
+  emailOwner?: boolean;
 }
 
 export async function notify(input: NotifyInput) {
@@ -198,6 +200,7 @@ export async function notify(input: NotifyInput) {
     if (ch?.email) channels.push('email');
     if (ch?.sms) channels.push('sms');
   }
+  if (input.audience === 'owner' && input.emailOwner && contact?.email) channels.push('email');
 
   for (const channel of channels) {
     const to = channel === 'email' ? contact?.email : channel === 'inApp' ? undefined : contact?.phone;
@@ -225,6 +228,8 @@ export async function notify(input: NotifyInput) {
     audience: input.audience,
     studentId: input.studentId,
     userId: input.userId,
+    // Where tapping the notification goes (it used to be dropped here, so links fell back to a default page).
+    href: input.href,
     deliveries,
   });
   emitNotification(doc);

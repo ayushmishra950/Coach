@@ -1,6 +1,6 @@
 import {
   ArrowDownRight, ArrowUpRight, CalendarClock, Check, CheckCircle2, Crown, CreditCard, GraduationCap, LifeBuoy, Lock, Plus, Receipt,
-  MessageSquare, RotateCcw, ShieldCheck, Sparkles, UserSquare2,
+  MessageSquare, QrCode, RotateCcw, ShieldCheck, Sparkles, UserSquare2,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import toast from 'react-hot-toast';
@@ -9,7 +9,9 @@ import {
   StatusBadge, Textarea, clsx,
 } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
+import { useSocketEvent } from '../../context/RealtimeContext';
 import { Pager } from '../../components/Pager';
+import { UpiPayModal, type UpiOrder } from '../../components/UpiPayModal';
 import { useApi, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
 import { subscribeWithRazorpay } from '../../lib/razorpay';
@@ -23,6 +25,8 @@ interface SubData {
   plan: PlanKey; effectivePlan: PlanKey; status: 'trial' | 'active' | 'past_due' | 'cancelled' | 'suspended'; billingCycle: Cycle;
   trialEndsAt?: string; trialDaysLeft: number | null; currentPeriodEnd?: string; cancelAtPeriodEnd?: boolean;
   usage: { students: number; teachers: number }; plans: Plan[]; history: SubPayment[]; paymentsEnabled?: boolean; gateway?: 'razorpay' | 'demo' | null;
+  /** Pay by UPI QR (verified by CoachFlow), when switched on. */
+  upi?: { upiId: string; payeeName: string } | null;
 }
 interface Ticket { _id: string; subject: string; message: string; priority: 'low' | 'normal' | 'high'; status: 'open' | 'in_progress' | 'resolved'; replies: { by: string; text: string; at: string }[]; createdAt: string }
 
@@ -52,6 +56,15 @@ export default function Subscription() {
   const { refresh } = useAuth();
   const { data, loading, error, reload } = useApi<SubData>('/subscription');
   const tickets = usePagedApi<Ticket>('/subscription/tickets');
+  // The institute's UPI payments (pure-upi orders): shows the ones still being verified.
+  const upiOrders = useApi<{ orders: UpiOrder[] }>(data?.upi ? '/upi/orders' : null);
+  const [upiPlan, setUpiPlan] = useState<{ key: string; name: string } | null>(null);
+  // Super Admin approved / rejected a payment or changed the plan → this page updates live
+  // (the session — sidebar badge, unlocked features — is refreshed by RealtimeContext).
+  useSocketEvent('institute:updated', () => {
+    reload();
+    upiOrders.reload();
+  });
   const [cycle, setCycle] = useState<Cycle | null>(null);
   const [checkout, setCheckout] = useState<Plan | null>(null);
   const [paying, setPaying] = useState(false);
@@ -87,6 +100,17 @@ export default function Subscription() {
   const paidPeriod = (data.status === 'active' || data.status === 'past_due') && !!data.currentPeriodEnd && new Date(data.currentPeriodEnd) > new Date();
 
   const openCheckout = (p: Plan) => { setSuccess(null); setCheckout(p); };
+  const payByUpi = () => {
+    if (!checkout) return;
+    setUpiPlan({ key: checkout.key, name: checkout.name });
+    setCheckout(null);
+  };
+  const closeUpi = () => { setUpiPlan(null); upiOrders.reload(); };
+  const upiPaid = async () => {
+    toast.success('Payment verified — your plan is active');
+    await Promise.all([refresh(), reload(), upiOrders.reload()]);
+  };
+  const verifying = (upiOrders.data?.orders ?? []).filter((o) => o.status === 'submitted');
   const closeCheckout = () => { if (!paying) { setCheckout(null); setSuccess(null); } };
 
   const pay = async () => {
@@ -167,6 +191,12 @@ export default function Subscription() {
           Online plan payments are not switched on yet. To upgrade or renew, raise a request with <b>Get help</b> and our team will activate your plan.
         </div>
       )}
+      {verifying.map((o) => (
+        <div key={o.id} className="mb-6 rounded-2xl bg-sky-50 px-4 py-3 text-sm font-medium text-sky-800 ring-1 ring-sky-200">
+          Your UPI payment of <b>₹{o.amount}</b> for {o.planName ?? o.plan} (UTR <span className="font-mono">{o.utr}</span>) is being verified.
+          Your plan switches on as soon as we find it in our bank statement.
+        </div>
+      ))}
 
       {/* ── Current plan ── */}
       <div className="grid gap-6 lg:grid-cols-3">
@@ -333,7 +363,8 @@ export default function Subscription() {
       <Modal open={!!checkout} onClose={closeCheckout} title={success ? 'All set!' : 'Confirm your plan'} size="sm"
         footer={success ? <Button onClick={closeCheckout}>Done</Button> : (
           <><Button variant="secondary" onClick={closeCheckout} disabled={paying}>Cancel</Button>
-            <Button variant="premium" loading={paying} icon={<CreditCard className="h-4 w-4" />} onClick={pay}>Pay {checkout && inr(price(checkout))}</Button></>
+            {data.upi && <Button variant={data.gateway ? 'secondary' : 'premium'} disabled={paying} icon={<QrCode className="h-4 w-4" />} onClick={payByUpi}>Pay by UPI QR</Button>}
+            {data.gateway && <Button variant="premium" loading={paying} icon={<CreditCard className="h-4 w-4" />} onClick={pay}>Pay {checkout && inr(price(checkout))}</Button>}</>
         )}>
         {checkout && (success ? (
           <div className="py-4 text-center animate-fade-up">
@@ -357,12 +388,23 @@ export default function Subscription() {
               <div className="flex justify-between"><span className="text-slate-500">Starts</span><span className="font-semibold">Today</span></div>
               <div className="flex justify-between border-t border-slate-100 pt-2"><span className="font-semibold text-slate-700">Total due now</span><span className="font-extrabold text-slate-900">{inr(price(checkout))}</span></div>
             </div>
-            <p className="mt-4 flex items-center gap-2 rounded-xl bg-amber-50 p-3 text-xs text-amber-800">
-              <ShieldCheck className="h-4 w-4 shrink-0" /> Demo mode: payment is simulated instantly — no money is charged.
-            </p>
+            {data.gateway === 'demo' && (
+              <p className="mt-4 flex items-center gap-2 rounded-xl bg-amber-50 p-3 text-xs text-amber-800">
+                <ShieldCheck className="h-4 w-4 shrink-0" /> Demo mode: payment is simulated instantly — no money is charged.
+              </p>
+            )}
+            {data.upi && (
+              <p className="mt-4 flex items-center gap-2 rounded-xl bg-sky-50 p-3 text-xs text-sky-800">
+                <QrCode className="h-4 w-4 shrink-0" /> UPI QR: pay from any UPI app with no extra charges. Your plan switches on after we verify the payment, usually within a few hours.
+              </p>
+            )}
           </div>
         ))}
       </Modal>
+
+      {data.upi && (
+        <UpiPayModal open={!!upiPlan} plan={upiPlan} cycle={activeCycle} upi={data.upi} onClose={closeUpi} onPaid={upiPaid} />
+      )}
 
       <ConfirmDialog open={cancelOpen} onClose={() => setCancelOpen(false)} onConfirm={cancel} loading={cancelling} danger
         title="Cancel subscription?" confirmLabel="Yes, cancel"

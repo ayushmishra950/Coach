@@ -36,6 +36,7 @@ import staff from './routes/staff.js';
 import students from './routes/students.js';
 import subscription from './routes/subscription.js';
 import teachers from './routes/teachers.js';
+import upi from './routes/upi.js';
 import tests from './routes/tests.js';
 import { seed } from './seed.js';
 import { ensurePlans } from './services/plan.js';
@@ -43,6 +44,7 @@ import { initRealtime } from './services/realtime.js';
 import { startReminderScheduler } from './services/reminders.js';
 import { startSalaryScheduler } from './services/salary.js';
 import { newTrialEnd } from './services/platform.js';
+import { initUpiStore, upiEnabled } from './services/upi.js';
 import { errorHandler } from './utils/http.js';
 import { compressJson, flatQueryParser, rateLimit, securityHeaders, staticGzip } from './utils/security.js';
 
@@ -77,6 +79,7 @@ app.use('/api/announcements', announcements);
 app.use('/api/notifications', notifications);
 app.use('/api/insights', insights);
 app.use('/api/subscription', subscription);
+app.use('/api/upi', upi);
 app.use('/api/settings', settings);
 app.use('/api/parent', parent);
 app.use('/api/parent', parentExtra);
@@ -118,6 +121,8 @@ async function main() {
   await connectDB();
   await ensureJwtSecret();
   await ensurePlans();
+  await initUpiStore().catch((e) => console.error('[upi] could not create indexes:', e?.message));
+  if (upiEnabled()) console.log(`💸 UPI plan payments on (${config.upi.id})`);
   if (config.demoPayments) console.warn('⚠  Demo payments are ON (local demo mode): fees and plans can be "paid" without a gateway.');
   if (config.seedOnEmpty && !(await User.exists({}))) {
     if (config.isProd) console.warn('⚠  SEED_ON_EMPTY=true on a live server: loading the demo institute. Remove it once the demo data exists.');

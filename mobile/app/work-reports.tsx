@@ -16,7 +16,7 @@ export default function WorkReportsScreen() {
   const [status, setStatus] = useState<Status>('unseen');
   const [day, setDay] = useState<'all' | 'today'>('all');
   const list = usePaged<WorkReport, Extra>('/work-reports', { status: status === 'all' ? undefined : status, date: day === 'today' ? ymd() : undefined });
-  usePoll(() => list.reload());
+  usePoll(() => list.reload(), ['report:new']);
   const [open, setOpen] = useState<WorkReport | null>(null);
 
   const seenAll = async () => {

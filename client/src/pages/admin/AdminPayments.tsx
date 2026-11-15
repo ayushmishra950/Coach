@@ -3,6 +3,7 @@ import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { Badge, Button, Card, EmptyState, ErrorState, Modal, PageHeader, Skeleton, StatCard, StatusBadge, Tabs, Textarea, clsx } from '../../components/ui';
 import { Pager } from '../../components/Pager';
+import { UpiVerifyCard } from '../../components/UpiVerifyCard';
 import { usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
 import { downloadCSV, fmtDate, fmtDateTime, inr, inrShort } from '../../lib/format';
@@ -91,6 +92,8 @@ export default function AdminPayments() {
         subtitle="Billing transactions from institutes to CoachFlow, newest first."
         actions={<Button variant="secondary" icon={<Download className="h-4 w-4" />} onClick={exportCsv} loading={exporting} disabled={!rows.length}>Export CSV</Button>}
       />
+
+      <UpiVerifyCard onChange={reload} />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard label="Collected" value={inrShort(summary.collected)} icon={<Wallet className="h-5 w-5" />} tone="green" hint={`${summary.successCount} successful payments`} />

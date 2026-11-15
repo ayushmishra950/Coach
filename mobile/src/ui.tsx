@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import type { ComponentProps, ReactNode } from 'react';
+import { useState, type ComponentProps, type ReactNode } from 'react';
 import {
   ActivityIndicator, Modal as RNModal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
   type StyleProp, type TextInputProps, type TextStyle, type ViewStyle,
@@ -111,11 +111,24 @@ export function ListItem({ title, subtitle, right, left, onPress, icon }: { titl
   );
 }
 
-export function Input({ label, hint, style, ...rest }: TextInputProps & { label?: string; hint?: string }) {
+export function Input({ label, hint, style, secureTextEntry, ...rest }: TextInputProps & { label?: string; hint?: string }) {
+  // Password fields get an eye button to show / hide what was typed.
+  const [show, setShow] = useState(false);
+  const isPassword = !!secureTextEntry;
   return (
     <View style={{ marginBottom: 12 }}>
       {label ? <Text style={s.label}>{label}</Text> : null}
-      <TextInput placeholderTextColor={C.muted} style={[s.input, rest.multiline && { minHeight: 80, textAlignVertical: 'top' }, style]} {...rest} />
+      <View>
+        <TextInput placeholderTextColor={C.muted} autoCapitalize={isPassword ? 'none' : rest.autoCapitalize} {...rest}
+          secureTextEntry={isPassword && !show}
+          style={[s.input, rest.multiline && { minHeight: 80, textAlignVertical: 'top' }, isPassword && { paddingRight: 48 }, style]} />
+        {isPassword ? (
+          <Pressable onPress={() => setShow((v) => !v)} hitSlop={10} accessibilityRole="button" accessibilityLabel={show ? 'Hide password' : 'Show password'}
+            style={{ position: 'absolute', right: 6, top: 0, bottom: 0, width: 40, alignItems: 'center', justifyContent: 'center' }}>
+            <Ionicons name={show ? 'eye-off-outline' : 'eye-outline'} size={20} color={C.muted} />
+          </Pressable>
+        ) : null}
+      </View>
       {hint ? <Text style={[s.itemSub, { marginTop: 4 }]}>{hint}</Text> : null}
     </View>
   );

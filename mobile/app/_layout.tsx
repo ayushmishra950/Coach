@@ -2,12 +2,14 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from '../src/auth';
+import { RealtimeProvider } from '../src/realtime';
 import { C } from '../src/ui';
 
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
+        <RealtimeProvider>
         <StatusBar style="dark" />
         <Stack
           screenOptions={{
@@ -23,6 +25,7 @@ export default function RootLayout() {
           <Stack.Screen name="teacher" options={{ headerShown: false }} />
           <Stack.Screen name="parent" options={{ headerShown: false }} />
         </Stack>
+        </RealtimeProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

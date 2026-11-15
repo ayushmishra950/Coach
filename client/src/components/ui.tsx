@@ -1,6 +1,6 @@
 import clsx from 'clsx';
-import { AlertTriangle, Inbox, Loader2, Search, X } from 'lucide-react';
-import { useEffect, useId, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { AlertTriangle, Eye, EyeOff, Inbox, Loader2, Search, X } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { initials } from '../lib/format';
 
@@ -254,8 +254,23 @@ export function Field({ label, children, hint, className }: { label?: string; ch
 export function Input({ label, hint, className, ...rest }: InputHTMLAttributes<HTMLInputElement> & { label?: string; hint?: string }) {
   return (
     <Field label={label} hint={hint} className={className}>
-      <input className="input" {...rest} />
+      {rest.type === 'password' ? <PasswordInput {...rest} /> : <input className="input" {...rest} />}
     </Field>
+  );
+}
+
+/** Password box with an eye button to show / hide what was typed. */
+export function PasswordInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <input {...rest} type={show ? 'text' : 'password'} className={clsx('input pr-11', className)} />
+      <button type="button" onClick={() => setShow((v) => !v)} tabIndex={-1}
+        aria-label={show ? 'Hide password' : 'Show password'} title={show ? 'Hide password' : 'Show password'}
+        className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+        {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </div>
   );
 }
 
