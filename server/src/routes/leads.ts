@@ -79,7 +79,7 @@ r.get(
     const recent = last30.reduce((a, x) => a + x.n, 0);
     const recentConverted = last30.find((x) => x._id === 'converted')?.n ?? 0;
     res.json({
-      ...paged(items, total, p),
+      ...paged(items as unknown[], total, p),
       counts: { ...counts, all, open: all - (counts.converted ?? 0) - (counts.lost ?? 0), followup: followUps },
       last30: { total: recent, converted: recentConverted, rate: recent ? Math.round((recentConverted / recent) * 100) : 0 },
     });
