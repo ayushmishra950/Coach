@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Institute, Invoice, Lock, Student, type InstituteDoc } from '../models/index.js';
-import { addDays, startOfDay } from '../utils/dates.js';
+import { addDays, startOfDay, ymd } from '../utils/dates.js';
 import { notify } from './notify.js';
 import { inr } from './payments.js';
 import { hasFeature } from './plan.js';
@@ -10,43 +10,52 @@ const fmt = (d: Date) => d.toLocaleDateString('en-IN', { day: 'numeric', month: 
 /** Sends before-due / on-due / overdue reminders according to the institute's rules. */
 export async function runReminders(institute: InstituteDoc) {
   const rules = institute.settings?.reminders;
+  const daysBefore = rules?.daysBefore ?? 1;
+  const daysAfter = rules?.daysAfter ?? 1;
+  const perDay = rules?.overduePerDay === 2 ? 2 : 1;
   const today = startOfDay();
-  // Only invoices that could need a reminder today: due within the "days before" window (or
-  // already past due) and not reminded yet today.
-  const horizon = addDays(today, (rules?.daysBefore ?? 3) + 1);
+  const todayKey = ymd(today);
+  const now = Date.now();
+  // Only invoices that could need a reminder now: due within the "days before" window (or
+  // already past due). Overdue ones may get a second reminder later the same day.
+  const horizon = addDays(today, daysBefore + 1);
   const invoices = await Invoice.find({
     instituteId: institute._id,
     status: { $ne: 'paid' },
     dueDate: { $lt: horizon },
-    $or: [{ lastReminderAt: { $exists: false } }, { lastReminderAt: null }, { lastReminderAt: { $lt: today } }],
+    $or: [
+      { lastReminderAt: { $exists: false } }, { lastReminderAt: null }, { lastReminderAt: { $lt: today } },
+      ...(perDay === 2 ? [{ dueDate: { $lt: today }, reminderDay: todayKey, reminderDayCount: { $lt: 2 } }] : []),
+    ],
   })
-    .select('studentId title amount paidAmount dueDate lastReminderAt reminderCount')
+    .select('studentId title amount paidAmount dueDate lastReminderAt reminderCount reminderDay reminderDayCount')
     .lean();
   const students = await Student.find({ _id: { $in: [...new Set(invoices.map((i) => String(i.studentId)))] }, instituteId: institute._id, status: 'active' })
     .select('name parentPhone parentEmail status')
     .lean();
   const studentBy = new Map(students.map((s) => [String(s._id), s]));
-  const done: { id: unknown; count: number }[] = [];
+  const done: { id: unknown; count: number; dayCount: number }[] = [];
   let sent = 0;
   const flush = async () => {
     if (!done.length) return;
     const at = new Date();
     const batch = done.splice(0);
-    await Invoice.bulkWrite(batch.map((d) => ({ updateOne: { filter: { _id: d.id }, update: { $set: { lastReminderAt: at, reminderCount: d.count } } } })));
+    await Invoice.bulkWrite(batch.map((d) => ({ updateOne: { filter: { _id: d.id }, update: { $set: { lastReminderAt: at, reminderCount: d.count, reminderDay: todayKey, reminderDayCount: d.dayCount } } } })));
   };
 
   for (const inv of invoices) {
     const due = startOfDay(inv.dueDate);
     const daysToDue = Math.round((due.getTime() - today.getTime()) / 86400000);
     const last = inv.lastReminderAt ? startOfDay(inv.lastReminderAt) : null;
-    if (last && last.getTime() === today.getTime()) continue; // one reminder per day max
+    const sentToday = inv.reminderDay === todayKey ? (inv.reminderDayCount ?? 0) : last && last.getTime() === today.getTime() ? 1 : 0;
 
     let kind: 'before' | 'today' | 'after' | null = null;
-    if (daysToDue > 0 && daysToDue <= (rules?.daysBefore ?? 3) && !last) kind = 'before';
-    else if (daysToDue === 0 && rules?.onDueDate !== false) kind = 'today';
-    else if (daysToDue < 0 && -daysToDue >= Math.max(1, rules?.daysAfter ?? 3)) {
-      const gap = last ? (today.getTime() - last.getTime()) / 86400000 : Infinity;
-      if (gap >= Math.max(1, rules?.daysAfter ?? 3)) kind = 'after';
+    if (sentToday === 0 && !last && daysToDue > 0 && daysToDue <= daysBefore) kind = 'before';
+    else if (sentToday === 0 && daysToDue === 0 && rules?.onDueDate !== false) kind = 'today';
+    else if (daysToDue < 0 && daysAfter > 0 && -daysToDue >= daysAfter) {
+      // Overdue: every day — once, or twice with at least 5 hours between the two.
+      const hoursSinceLast = inv.lastReminderAt ? (now - new Date(inv.lastReminderAt).getTime()) / 3600000 : Infinity;
+      if (sentToday === 0 || (sentToday < perDay && hoursSinceLast >= 5)) kind = 'after';
     }
     if (!kind) continue;
 
@@ -75,7 +84,7 @@ export async function runReminders(institute: InstituteDoc) {
       console.error('[reminder]', (e as Error).message);
       continue;
     }
-    done.push({ id: inv._id, count: (inv.reminderCount ?? 0) + 1 });
+    done.push({ id: inv._id, count: (inv.reminderCount ?? 0) + 1, dayCount: sentToday + 1 });
     sent++;
     // Record progress every 50 reminders, so a crash mid-run never re-sends the ones already out.
     if (done.length >= 50) await flush();
@@ -119,8 +128,11 @@ export async function acquireLock(key: string, ttlMs: number) {
 /** Background job: runs automatic reminders for every eligible institute. */
 export function startReminderScheduler() {
   const tick = async () => {
-    // Lock lasts almost the whole interval, so only one server runs each 6-hour round.
-    if (!(await acquireLock('fee-reminders', 5.5 * 60 * 60 * 1000))) return;
+    // Parents aren't messaged at night: rounds run between 8 AM and 9 PM (app time zone).
+    const hour = new Date().getHours();
+    if (hour < 8 || hour >= 21) return;
+    // Lock lasts almost the whole interval, so only one server runs each 3-hour round.
+    if (!(await acquireLock('fee-reminders', 2.5 * 60 * 60 * 1000))) return;
     const institutes = await Institute.find({ status: { $in: ['trial', 'active', 'past_due'] }, 'settings.reminders.enabled': true });
     // A few institutes at a time, each under its own lock (shared with the manual button).
     const queue = [...institutes];
@@ -136,5 +148,6 @@ export function startReminderScheduler() {
     await Lock.updateOne({ key: 'fee-reminders' }, { $set: { until: new Date(Date.now() + 20 * 60 * 1000) } }).catch(() => undefined);
   };
   setTimeout(() => tick().catch(console.error), 15_000);
-  setInterval(() => tick().catch(console.error), 6 * 60 * 60 * 1000);
+  // Every 3 hours, so "twice a day" overdue reminders get a morning and an afternoon/evening slot.
+  setInterval(() => tick().catch(console.error), 3 * 60 * 60 * 1000);
 }

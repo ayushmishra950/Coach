@@ -14,24 +14,28 @@ import { useApi, useClientPage, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
 import { fmtDate, fmtDateShort, fmtTime, inr, pctTone, timeAgo, toDate, ymd } from '../../lib/format';
 import { notificationHref } from '../../lib/notifications';
+import { payWithRazorpay } from '../../lib/razorpay';
+import { LeaveSection, MaterialsSection, NoticeBoardSection, OnlineTestsSection, SyllabusSection, type PortalEvent } from '../../components/ParentSections';
 import type { Announcement, Invoice, Notification, Payment } from '../../lib/types';
 
 interface Child {
   student: { _id: string; name: string; studentCode: string; course?: string };
-  batches: { _id: string; name: string; subject?: string; days: string[]; startTime: string; endTime: string; teacher?: string }[];
+  batches: { _id: string; name: string; subject?: string; days: string[]; startTime: string; endTime: string; teacher?: string; syllabus?: { total: number; done: number; recent: string[]; next: string | null } | null }[];
   attendance: { pct: number; total: number; present: number; recent: { date: string; batch?: string; batchId: string; status?: 'present' | 'absent' | 'late' }[] };
   results: {
     _id: string; subject: string; topic?: string; date: string; maxMarks: number; marks: number | null; absent: boolean; pct: number | null;
-    passPercent?: number; remark?: string | null;
+    passPercent?: number; remark?: string | null; rank?: number | null; outOf?: number; classAvgPct?: number | null;
   }[];
   latestResult: Child['results'][number] | null;
   fees: { total: number; paid: number; pending: number; invoices: Invoice[]; payments: ParentPayment[] };
   nextClass: { at: string; batch: string; subject?: string } | null;
 }
 interface Overview {
-  institute: { name: string; phone?: string; brandColor?: string; onlinePay?: boolean };
+  institute: { name: string; phone?: string; brandColor?: string; onlinePay?: boolean; gateway?: 'razorpay' | 'demo' | null };
   children: Child[];
   announcements: Omit<Announcement, 'batchIds'>[];
+  holidays?: { date: string; name: string }[];
+  events?: PortalEvent[];
 }
 
 const timeOf = (iso: string) => {
@@ -171,7 +175,7 @@ export default function ParentPortal() {
               </div>
             )}
 
-            <ChildView key={child.student._id} child={child} announcements={data.announcements} institute={data.institute} onReload={reload} />
+            <ChildView key={child.student._id} child={child} announcements={data.announcements} institute={data.institute} onReload={reload} holidays={data.holidays ?? []} events={data.events ?? []} />
           </>
         )}
       </main>
@@ -219,7 +223,7 @@ function Section({ id, title, icon, children, action }: { id?: string; title: st
   );
 }
 
-function ChildView({ child, announcements, institute, onReload }: { child: Child; announcements: Overview['announcements']; institute: Overview['institute']; onReload: () => void }) {
+function ChildView({ child, announcements, institute, onReload, holidays, events }: { child: Child; announcements: Overview['announcements']; institute: Overview['institute']; onReload: () => void; holidays: { date: string; name: string }[]; events: PortalEvent[] }) {
   const { student, attendance, latestResult, fees, nextClass } = child;
   const cls = student.course || child.batches[0]?.name;
 
@@ -288,16 +292,21 @@ function ChildView({ child, announcements, institute, onReload }: { child: Child
 
       {/* Quick nav */}
       <nav className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
-        {[['fees', 'Fees'], ['results', 'Results'], ['attendance', 'Attendance'], ['schedule', 'Schedule'], ['announcements', 'Announcements'], ['notifications', 'Notifications']].map(([id, l]) => (
+        {[['fees', 'Fees'], ['results', 'Results'], ['online-tests', 'Online tests'], ['materials', 'Study material'], ['attendance', 'Attendance'], ['leave', 'Leave'], ['notice-board', 'Holidays & events'], ['schedule', 'Schedule'], ['announcements', 'Announcements'], ['notifications', 'Notifications']].map(([id, l]) => (
           <a key={id} href={`#${id}`} className="whitespace-nowrap rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 hover:text-brand-700 hover:ring-brand-300">{l}</a>
         ))}
       </nav>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <FeesSection fees={fees} onReload={onReload} onlinePay={!!institute.onlinePay} phone={institute.phone} />
-        <ResultsSection results={child.results} />
+        <FeesSection fees={fees} onReload={onReload} onlinePay={!!institute.onlinePay} gateway={institute.gateway ?? null} phone={institute.phone} />
+        <ResultsSection results={child.results} studentId={student._id} />
+        <OnlineTestsSection studentId={student._id} />
+        <MaterialsSection studentId={student._id} />
         <AttendanceSection attendance={attendance} />
+        <LeaveSection studentId={student._id} name={student.name} />
+        <NoticeBoardSection holidays={holidays} events={events} />
         <ScheduleSection batches={child.batches} />
+        <SyllabusSection batches={child.batches} />
         <AnnouncementsSection items={announcements} />
         <NotificationsSection />
       </div>
@@ -314,7 +323,7 @@ function ChildView({ child, announcements, institute, onReload }: { child: Child
 
 /* ------------------------------------------------------------------ */
 
-function FeesSection({ fees, onReload, onlinePay, phone }: { fees: Child['fees']; onReload: () => void; onlinePay: boolean; phone?: string }) {
+function FeesSection({ fees, onReload, onlinePay, gateway, phone }: { fees: Child['fees']; onReload: () => void; onlinePay: boolean; gateway: 'razorpay' | 'demo' | null; phone?: string }) {
   const navigate = useNavigate();
   const { hash } = useLocation();
   const [payInv, setPayInv] = useState<Invoice | null>(null);
@@ -334,13 +343,20 @@ function FeesSection({ fees, onReload, onlinePay, phone }: { fees: Child['fees']
     if (!payInv) return;
     setPaying(true);
     try {
+      if (gateway === 'razorpay') {
+        // Real payment: Razorpay window (UPI / card / net banking), verified on the server.
+        const payment = await payWithRazorpay(payInv._id);
+        setPayInv(null);
+        if (payment) setDone(payment);
+        return;
+      }
       const { data } = await api.post<{ ok: boolean; payment: Payment }>('/parent/pay', { invoiceId: payInv._id });
       setPayInv(null);
       setDone(data.payment);
     } catch (e) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 402) toast.error('Online payment is not enabled by your institute — please pay at the centre');
-      else toast.error(errMsg(e));
+      else toast.error(errMsg(e, (e as Error)?.message));
       setPayInv(null);
     } finally {
       setPaying(false);
@@ -419,7 +435,7 @@ function FeesSection({ fees, onReload, onlinePay, phone }: { fees: Child['fees']
             <p className="text-sm text-slate-500">{payInv.title}</p>
             <p className="mt-3 text-xs font-bold uppercase tracking-wide text-slate-400">Outstanding Amount</p>
             <p className="mt-1 text-4xl font-extrabold text-slate-900">{inr(payInv.amount - payInv.paidAmount)}</p>
-            <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-slate-400"><ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> Secure payment · receipt issued instantly</p>
+            <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-slate-400"><ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> {gateway === 'razorpay' ? 'UPI · Debit / Credit card · Net banking — secured by Razorpay' : 'Secure payment'} · receipt issued instantly</p>
           </div>
         )}
       </Modal>
@@ -440,10 +456,28 @@ function FeesSection({ fees, onReload, onlinePay, phone }: { fees: Child['fees']
   );
 }
 
-function ResultsSection({ results }: { results: Child['results'] }) {
+function ResultsSection({ results, studentId }: { results: Child['results']; studentId: string }) {
   const page = useClientPage(results, results[0]?._id);
+  // Oldest → newest for the trend line (last 10 scored tests).
+  const trend = results.filter((r) => r.pct != null).slice(0, 10).reverse();
   return (
-    <Section id="results" title="Results" icon={<ClipboardList className="h-4 w-4" />}>
+    <Section id="results" title="Results" icon={<ClipboardList className="h-4 w-4" />}
+      action={results.length > 0 && <Link to={`/portal/report-card?student=${studentId}`} className="text-xs font-semibold text-brand-600 hover:underline">Report card →</Link>}>
+      {trend.length >= 2 && (
+        <div className="mb-4 rounded-2xl bg-slate-50 p-3">
+          <p className="mb-1 text-xs font-semibold text-slate-500">Progress (last {trend.length} tests)</p>
+          <svg viewBox={`0 0 ${(trend.length - 1) * 40 + 20} 70`} className="h-20 w-full" preserveAspectRatio="none" role="img" aria-label="Score trend">
+            <polyline fill="none" stroke="#6366f1" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"
+              points={trend.map((r, i) => `${10 + i * 40},${62 - ((r.pct as number) / 100) * 54}`).join(' ')} />
+            {trend.some((r) => r.classAvgPct != null) && (
+              <polyline fill="none" stroke="#cbd5e1" strokeWidth="1.5" strokeDasharray="4 3"
+                points={trend.map((r, i) => `${10 + i * 40},${62 - ((r.classAvgPct ?? r.pct as number) / 100) * 54}`).join(' ')} />
+            )}
+            {trend.map((r, i) => <circle key={r._id} cx={10 + i * 40} cy={62 - ((r.pct as number) / 100) * 54} r="3.5" fill="#6366f1"><title>{`${r.subject}: ${r.pct}%`}</title></circle>)}
+          </svg>
+          <p className="mt-1 flex gap-3 text-[11px] text-slate-400"><span className="flex items-center gap-1"><span className="h-0.5 w-3 bg-brand-500" />Your child</span><span className="flex items-center gap-1"><span className="h-0.5 w-3 bg-slate-300" />Class average</span></p>
+        </div>
+      )}
       {results.length === 0 ? <p className="py-6 text-center text-sm text-slate-400">No published results yet.</p> : (
         <ul className="space-y-3">
           {page.items.map((r) => {
@@ -454,7 +488,7 @@ function ResultsSection({ results }: { results: Child['results'] }) {
               <div className="flex items-baseline justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold text-slate-800">{r.subject}{r.topic ? <span className="font-normal text-slate-400"> · {r.topic}</span> : null}</p>
-                  <p className="text-xs text-slate-400">{fmtDate(toDate(r.date))}</p>
+                  <p className="text-xs text-slate-400">{fmtDate(toDate(r.date))}{r.rank ? <> · <b className="text-brand-700">Rank {r.rank}</b> of {r.outOf}</> : null}{r.classAvgPct != null ? ` · class avg ${r.classAvgPct}%` : ''}</p>
                 </div>
                 <p className="shrink-0 text-sm font-extrabold text-slate-900">
                   {r.absent ? <Badge tone="red">Absent</Badge> : (

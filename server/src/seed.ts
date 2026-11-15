@@ -4,7 +4,7 @@ import mongoose, { Types } from 'mongoose';
 import { fileURLToPath } from 'node:url';
 import {
   Announcement, Attendance, AuditLog, Batch, Conversation, DEFAULT_PLANS, Institute, Invoice, Message, Notification, Payment, Plan, Student,
-  SubscriptionPayment, SupportTicket, Test, User,
+  SubscriptionPayment, SupportTicket, Test, User, Salary, StaffAttendance, Course, Lead, Material, LeaveRequest,
 } from './models/index.js';
 import { DAYS, addDays, ymd } from './utils/dates.js';
 
@@ -181,6 +181,49 @@ export async function seed() {
   }
   await Attendance.insertMany(attDocs);
 
+  // ── Teacher check-in / check-out for the last 3 weeks (+ today) ─────
+  const staffDocs: any[] = [];
+  const clock = (base: Date, h: number, m: number) => { const x = new Date(base); x.setHours(h, m, 0, 0); return x; };
+  for (let d = 21; d >= 0; d--) {
+    const date = addDays(now, -d);
+    if (date.getDay() === 0) continue; // Sundays off
+    for (const t of teachers) {
+      const r = rand();
+      if (d > 0 && r < 0.06) { staffDocs.push({ instituteId: I, teacherId: t._id, date: ymd(date), status: 'leave', ownerNote: 'Personal leave' }); continue; }
+      const inMin = 8 * 60 + 45 + Math.floor(rand() * 45); // 8:45 – 9:30
+      const checkIn = clock(date, Math.floor(inMin / 60), inMin % 60);
+      const lateBy = inMin - 9 * 60;
+      const row: any = { instituteId: I, teacherId: t._id, date: ymd(date), status: 'present', checkIn, late: lateBy > 15, lateBy: lateBy > 15 ? lateBy : 0 };
+      if (d > 0 && rand() > 0.04) {
+        const outMin = 17 * 60 + 30 + Math.floor(rand() * 60);
+        row.checkOut = clock(date, Math.floor(outMin / 60), outMin % 60);
+        row.minutes = Math.round((row.checkOut.getTime() - checkIn.getTime()) / 60000);
+        row.earlyLeave = outMin < 18 * 60;
+      }
+      if (d === 0 && (checkIn > now || rand() < 0.3)) continue; // some teachers haven't come in yet today
+      staffDocs.push(row);
+    }
+  }
+  await StaffAttendance.insertMany(staffDocs);
+
+  // ── Teacher salaries: two months back paid, last month partly paid (shows overdue) ──
+  const mKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const salaryDocs: any[] = [];
+  for (const back of [3, 2, 1]) {
+    const workMonth = new Date(now.getFullYear(), now.getMonth() - back, 1);
+    const due = new Date(now.getFullYear(), now.getMonth() - back + 1, 1);
+    teachers.forEach((t, i) => {
+      const paid = back > 1 || i % 2 === 0;
+      salaryDocs.push({
+        instituteId: I, teacherId: t._id, month: mKey(workMonth), baseAmount: t.salary, amount: t.salary, dueDate: due,
+        paidAmount: paid ? t.salary : 0, status: paid ? 'paid' : 'pending', paidAt: paid ? addDays(due, 1) : undefined,
+        payments: paid ? [{ amount: t.salary, method: 'bank', paidAt: addDays(due, 1) }] : [],
+      });
+    });
+  }
+  await Salary.insertMany(salaryDocs);
+  await Institute.updateOne({ _id: I }, { $set: { 'settings.salary.trackFrom': new Date(now.getFullYear(), now.getMonth() - 3, 1) } });
+
   // ── Fees: 3 installments per student, ~ ₹24k–36k annual ────────────
   let receipt = 0;
   const payments = [];
@@ -268,6 +311,79 @@ export async function seed() {
   await Notification.insertMany(notes.map((n) => ({ ...n, instituteId: I, deliveries: [{ channel: 'inApp', status: 'sent' }, ...(n.audience === 'parent' ? [{ channel: 'whatsapp', to: rahul.parentPhone, status: 'queued', info: 'Demo mode' }] : [])] })));
 
   await Institute.updateOne({ _id: I }, { 'counters.student': counter, 'counters.receipt': receipt });
+
+  // ── Courses, admissions website, enquiries ────────────────────────
+  await Course.create([
+    { instituteId: I, name: 'Class 10 Board Excellence', category: 'School (Class 9–10)', duration: '11 months', fee: 24000, feeNote: 'per year · 3 installments', order: 1,
+      description: 'Complete Maths & Science for CBSE Class 10 with weekly tests and doubt sessions.',
+      syllabus: ['Real Numbers', 'Polynomials', 'Linear Equations', 'Quadratic Equations', 'Trigonometry', 'Statistics', 'Chemical Reactions', 'Life Processes', 'Electricity', 'Light'],
+      highlights: ['Weekly chapter tests', 'Printed notes', 'Parent app with attendance & results'], batchIds: [batches[0]._id, batches[1]._id, batches[6]._id] },
+    { instituteId: I, name: 'JEE Main + Advanced (2-year)', category: 'JEE', duration: '2 years', fee: 95000, feeNote: 'per year', order: 2,
+      description: 'Physics, Chemistry and Maths for JEE with full-length mock tests every Sunday.',
+      syllabus: ['Kinematics', "Newton's Laws", 'Work, Energy & Power', 'Rotational Motion', 'Electrostatics', 'Mole Concept', 'Organic Basics', 'Calculus'],
+      highlights: ['IIT-qualified faculty', 'Online MCQ practice tests', 'All-India test series'], batchIds: [batches[2]._id, batches[5]._id] },
+    { instituteId: I, name: 'NEET Biology Intensive', category: 'NEET', duration: '12 months', fee: 60000, feeNote: 'per year', order: 3,
+      description: 'NCERT-focused Biology with daily practice questions.', syllabus: ['Cell Biology', 'Genetics', 'Human Physiology', 'Plant Physiology', 'Ecology'],
+      highlights: ['NCERT line-by-line', 'Daily DPPs'], batchIds: [batches[3]._id] },
+  ]);
+  await Institute.updateOne({ _id: I }, { $set: { website: {
+    enabled: true, slug: 'abc-coaching', demoEnabled: true, whatsapp: '9876543210',
+    tagline: 'Jaipur’s trusted coaching for Class 9–12, JEE & NEET since 2012',
+    about: 'ABC Coaching Institute has helped 3,000+ students since 2012. Small batches (max 40), experienced faculty, weekly tests and a parent app that shows attendance, results and fees in real time.',
+    stats: [{ value: '14 yrs', label: 'Teaching experience' }, { value: '3000+', label: 'Students taught' }, { value: '96%', label: 'Board pass rate' }, { value: '120+', label: 'JEE / NEET selections' }],
+    toppers: [
+      { name: 'Ananya Gupta', result: '98.6% · CBSE 10', year: '2026' }, { name: 'Rohan Mehta', result: 'AIR 1,240 · JEE Adv', year: '2026' },
+      { name: 'Sneha Kapoor', result: '655/720 · NEET', year: '2026' }, { name: 'Arjun Singh', result: '97.2% · CBSE 12', year: '2025' },
+    ],
+    testimonials: [
+      { name: 'Mrs. Sunita Sharma', role: 'Parent of a Class 10 student', text: 'Regular tests and the parent app keep us informed every day. My son’s maths improved from 62% to 88%.', rating: 5 },
+      { name: 'Rohan Mehta', role: 'JEE 2026', text: 'Sunday mock tests and doubt sessions made the real exam feel easy.', rating: 5 },
+    ],
+  } } });
+  const leadDefs: [string, string, string, string, string, number, string?][] = [
+    ['Mr. Vikas Jain', '9811122233', 'Class 10', 'website', 'new', 0, 'Is there a batch in the evening?'],
+    ['Mrs. Pooja Rathore', '9822233344', 'JEE', 'demo_form', 'demo_scheduled', -1],
+    ['Mr. Anil Saini', '9833344455', 'Class 9', 'walk_in', 'contacted', -3],
+    ['Ms. Kavita Rao', '9844455566', 'NEET', 'phone', 'demo_done', -6],
+    ['Mr. Deepak Joshi', '9855566677', 'Class 10', 'referral', 'converted', -12],
+    ['Mrs. Nidhi Arora', '9866677788', 'Class 12', 'website', 'lost', -20],
+  ];
+  await Lead.insertMany(leadDefs.map(([name, phone, cls, source, status, d, message]) => ({
+    instituteId: I, name, phone, studentClass: cls, source, status, message, kind: source === 'demo_form' ? 'demo' : 'enquiry',
+    courseName: cls === 'JEE' ? 'JEE Main + Advanced (2-year)' : cls === 'NEET' ? 'NEET Biology Intensive' : 'Class 10 Board Excellence',
+    demoAt: status === 'demo_scheduled' ? addDays(now, 2) : undefined, demoBatchId: status === 'demo_scheduled' ? batches[2]._id : undefined,
+    followUpAt: ['converted', 'lost'].includes(status) ? undefined : addDays(now, status === 'new' ? 0 : 1),
+    lostReason: status === 'lost' ? 'Fees too high' : undefined,
+    notes: [{ text: source === 'website' || source === 'demo_form' ? 'Enquiry from the website' : 'Added by office', by: 'Office', at: addDays(now, d) }],
+    createdAt: addDays(now, d),
+  })));
+
+  // ── Syllabus progress, study material, an online MCQ test, a leave request ──
+  const sylTopics = ['Real Numbers', 'Polynomials', 'Pair of Linear Equations', 'Quadratic Equations', 'Arithmetic Progressions', 'Triangles', 'Coordinate Geometry', 'Trigonometry', 'Circles', 'Statistics', 'Probability'];
+  for (const b of [batches[0], batches[6]]) {
+    b.syllabus = sylTopics.map((title: string, i: number) => ({ title, subject: 'Mathematics', done: i < 7, doneAt: i < 7 ? addDays(now, -70 + i * 9) : undefined, doneByName: i < 7 ? teachers[0].name : undefined }));
+    await b.save();
+  }
+  await Material.insertMany([
+    { instituteId: I, batchIds: [batches[0]._id, batches[6]._id], title: 'Trigonometry — formula sheet', kind: 'link', subject: 'Mathematics', url: 'https://ncert.nic.in/textbook.php?jemh1=8-15', uploadedBy: teachers[0]._id, uploadedByName: teachers[0].name, createdAt: addDays(now, -4) },
+    { instituteId: I, batchIds: [batches[0]._id], title: 'Quadratic Equations — recorded class', kind: 'video', subject: 'Mathematics', url: 'https://www.youtube.com/results?search_query=quadratic+equations+class+10', uploadedBy: teachers[0]._id, uploadedByName: teachers[0].name, createdAt: addDays(now, -2) },
+    { instituteId: I, batchIds: [batches[0]._id], title: 'Exercise 8.1 (all questions)', kind: 'assignment', subject: 'Mathematics', description: 'Solve in your notebook and bring it to the next class.', dueDate: addDays(now, 2), uploadedBy: teachers[0]._id, uploadedByName: teachers[0].name, createdAt: addDays(now, -1) },
+  ]);
+  await Test.create({
+    instituteId: I, batchId: batches[0]._id, subject: 'Mathematics', topic: 'Trigonometry quick quiz', date: now, createdBy: teachers[0]._id,
+    mode: 'online', durationMins: 10, maxMarks: 4, opensAt: addDays(now, -1), closesAt: addDays(now, 5), showAnswers: true,
+    questions: [
+      { text: 'sin²θ + cos²θ = ?', options: ['0', '1', '2', 'tan θ'], correct: 1, marks: 1, explanation: 'Basic identity.' },
+      { text: 'tan 45° = ?', options: ['0', '1/√2', '1', '√3'], correct: 2, marks: 1 },
+      { text: 'sin 30° = ?', options: ['1/2', '√3/2', '1', '0'], correct: 0, marks: 1 },
+      { text: 'cos 60° = ?', options: ['√3/2', '1/2', '0', '1'], correct: 1, marks: 1 },
+    ],
+  });
+  await LeaveRequest.create({ instituteId: I, studentId: students[1]._id, from: ymd(addDays(now, 1)), to: ymd(addDays(now, 2)), reason: 'Family function out of town', status: 'pending' });
+  await Announcement.create([
+    { instituteId: I, title: 'Parent-Teacher Meeting', body: 'PTM for Class 10 batches. Please meet the subject teachers between 10 AM and 1 PM.', category: 'ptm', eventDate: addDays(now, 6), batchIds: [batches[0]._id, batches[1]._id], createdByName: acc.owner.name },
+    { instituteId: I, title: 'Extra class: Trigonometry revision', body: 'Extra revision class for Class 10 Maths — A at 4 PM.', category: 'extra_class', eventDate: addDays(now, 3), batchIds: [batches[0]._id], createdByName: teachers[0].name },
+  ]);
 
   // ── Demo chats (in-app messaging) ────────────────────────────────
   const owner = (await User.findOne({ email: acc.owner.email }))!;

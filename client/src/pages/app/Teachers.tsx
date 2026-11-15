@@ -2,7 +2,7 @@ import { BookOpen, Check, Copy, GraduationCap, KeyRound, Mail, MoreVertical, Pen
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 import { Avatar, Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Input, Modal, PageHeader, SearchInput, Skeleton, Tabs, clsx } from '../../components/ui';
-import { useDebounced, usePagedApi } from '../../hooks/useApi';
+import { useApi, useDebounced, usePagedApi } from '../../hooks/useApi';
 import { Pager } from '../../components/Pager';
 import { api, errMsg, isUpgradeError } from '../../lib/api';
 import { fmtDate, inr, ymd } from '../../lib/format';
@@ -46,8 +46,12 @@ function TeacherModal({ open, onClose, teacher, onSaved }: { open: boolean; onCl
   const editing = !!teacher;
   const [f, setF] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  // Batches this teacher teaches (lead or co-teacher) — picked right here on the form.
+  const batchOpts = useApi<{ _id: string; name: string; color?: string; subject?: string }[]>(open ? '/batches/options' : null, { active: 'true' });
+  const [batchIds, setBatchIds] = useState<string[]>([]);
   useEffect(() => {
     if (!open) return;
+    setBatchIds(teacher?.batches.map((b) => b._id) ?? []);
     setF({
       name: teacher?.name ?? '', email: teacher?.email ?? '', phone: teacher?.phone ?? '', subjects: teacher?.subjects?.join(', ') ?? '',
       qualification: teacher?.qualification ?? '', salary: teacher?.salary != null ? String(teacher.salary) : '',
@@ -65,6 +69,7 @@ function TeacherModal({ open, onClose, teacher, onSaved }: { open: boolean; onCl
     const body: Record<string, unknown> = {
       name: f.name.trim(), phone: f.phone, qualification: f.qualification, joiningDate: f.joiningDate,
       subjects: f.subjects.split(',').map((x) => x.trim()).filter(Boolean),
+      ...(batchOpts.data && { batchIds }),
       // When editing, an emptied salary is sent as '' so the server clears it.
       ...(f.salary !== '' ? { salary: Number(f.salary) } : editing ? { salary: '' } : {}),
     };
@@ -104,6 +109,25 @@ function TeacherModal({ open, onClose, teacher, onSaved }: { open: boolean; onCl
         <Input label="Monthly salary (₹)" type="number" min={0} value={f.salary ?? ''} onChange={set('salary')} />
         <Input label="Joining date" type="date" value={f.joiningDate ?? ''} onChange={set('joiningDate')} />
         {!editing && <Input label="Password (optional)" value={f.password ?? ''} onChange={set('password')} placeholder="Auto-generated if blank" minLength={8} hint="At least 8 characters" />}
+        <div className="sm:col-span-2">
+          <p className="label">Batches they teach</p>
+          {!batchOpts.data ? <Skeleton className="h-9 w-full" /> : batchOpts.data.length === 0 ? (
+            <p className="text-sm text-slate-400">No batches yet — create one from the Batches page.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {batchOpts.data.map((b) => {
+                const on = batchIds.includes(b._id);
+                return (
+                  <button type="button" key={b._id} onClick={() => setBatchIds((p) => (on ? p.filter((x) => x !== b._id) : [...p, b._id]))}
+                    className={clsx('rounded-full px-3 py-1 text-xs font-semibold ring-1', on ? 'bg-brand-600 text-white ring-brand-600' : 'bg-white text-slate-600 ring-slate-200')}>
+                    {b.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <p className="mt-1 text-xs text-slate-400">The teacher sees only these batches — their students, attendance, tests and material.</p>
+        </div>
       </form>
     </Modal>
   );

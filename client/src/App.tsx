@@ -6,6 +6,8 @@ import { homeFor, useAuth } from './context/AuthContext';
 
 const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
+const DailyReport = lazy(() => import('./pages/app/DailyReport'));
+const WorkReports = lazy(() => import('./pages/app/WorkReports'));
 const Register = lazy(() => import('./pages/Register'));
 const Legal = lazy(() => import('./pages/Legal'));
 
@@ -26,6 +28,18 @@ const Announcements = lazy(() => import('./pages/app/Announcements'));
 const Notifications = lazy(() => import('./pages/app/Notifications'));
 const Subscription = lazy(() => import('./pages/app/Subscription'));
 const Settings = lazy(() => import('./pages/app/Settings'));
+const StaffAttendance = lazy(() => import('./pages/app/StaffAttendance'));
+const Salaries = lazy(() => import('./pages/app/Salaries'));
+const MyAttendance = lazy(() => import('./pages/app/MyAttendance'));
+const Leads = lazy(() => import('./pages/app/Leads'));
+const Courses = lazy(() => import('./pages/app/Courses'));
+const Website = lazy(() => import('./pages/app/Website'));
+const Materials = lazy(() => import('./pages/app/Materials'));
+const Leaves = lazy(() => import('./pages/app/Leaves'));
+const Timetable = lazy(() => import('./pages/app/Timetable'));
+const TakeTest = lazy(() => import('./pages/parent/TakeTest'));
+const ReportCard = lazy(() => import('./pages/parent/ReportCard'));
+const PublicSite = lazy(() => import('./pages/PublicSite'));
 
 const ParentPortal = lazy(() => import('./pages/parent/ParentPortal'));
 const Messages = lazy(() => import('./pages/Messages'));
@@ -59,6 +73,17 @@ export default function App() {
           <Route path="students" element={<Students />} />
           <Route path="students/:id" element={<StudentProfile />} />
           <Route path="teachers" element={ownerOnly(<Teachers />)} />
+          <Route path="staff" element={ownerOnly(<StaffAttendance />)} />
+          <Route path="leads" element={ownerOnly(<Leads />)} />
+          <Route path="courses" element={ownerOnly(<Courses />)} />
+          <Route path="website" element={ownerOnly(<Website />)} />
+          <Route path="materials" element={<Materials />} />
+          <Route path="leaves" element={<Leaves />} />
+          <Route path="timetable" element={<Timetable />} />
+          <Route path="salaries" element={ownerOnly(<Salaries />)} />
+          <Route path="daily-report" element={<Protected roles={['teacher']}><DailyReport /></Protected>} />
+          <Route path="work-reports" element={ownerOnly(<WorkReports />)} />
+          <Route path="my-attendance" element={<Protected roles={['teacher']}><MyAttendance /></Protected>} />
           <Route path="batches" element={<Batches />} />
           <Route path="batches/:id" element={<BatchDetail />} />
           <Route path="attendance" element={<Attendance />} />
@@ -77,6 +102,9 @@ export default function App() {
         </Route>
 
         <Route path="/portal" element={<Protected roles={['parent']}><ParentPortal /></Protected>} />
+        <Route path="/portal/test/:id" element={<Protected roles={['parent']}><TakeTest /></Protected>} />
+        <Route path="/portal/report-card" element={<Protected roles={['parent']}><ReportCard /></Protected>} />
+        <Route path="/site/:slug" element={<PublicSite />} />
         <Route path="/portal/receipt/:id" element={<Protected roles={['parent']}><Receipt /></Protected>} />
         <Route path="/portal/messages" element={<Protected roles={['parent']}><PortalMessages /></Protected>} />
         <Route path="/portal/account" element={<Protected roles={['parent']}><PortalAccount /></Protected>} />

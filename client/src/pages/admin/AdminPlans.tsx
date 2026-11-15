@@ -27,6 +27,7 @@ export default function AdminPlans() {
   return (
     <div>
       <PageHeader title="Plans & pricing" subtitle="Configure subscription tiers, limits and feature entitlements." />
+      <TrialDefaultCard />
 
       <div className="mb-6 flex items-start gap-3 rounded-2xl border border-brand-100 bg-brand-50/60 p-4 text-sm text-brand-900">
         <Info className="mt-0.5 h-5 w-5 shrink-0 text-brand-600" />
@@ -173,6 +174,47 @@ function PlanEditor({ plan, featureKeys, onSaved }: { plan: Plan; featureKeys: F
         <Button className="flex-1" variant={plan.key === 'premium' ? 'premium' : 'primary'} icon={<Save className="h-4 w-4" />} loading={saving} disabled={!dirty} onClick={save}>
           Save {d.name || 'plan'}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Default free-trial length for every NEW institute. Existing ones are changed per institute (Institutes → Manage). */
+function TrialDefaultCard() {
+  const { data, reload } = useApi<{ trialDays: number }>('/admin/settings');
+  const [days, setDays] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (data) setDays(String(data.trialDays)); }, [data]);
+  const n = Number(days);
+  const valid = days !== '' && Number.isInteger(n) && n >= 0 && n <= 365;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put('/admin/settings', { trialDays: n });
+      toast.success(n ? `New institutes now get a ${n}-day free trial` : 'New institutes now start without a trial');
+      reload();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card card-pad mb-6">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end">
+        <div className="flex-1">
+          <p className="font-bold text-slate-900">Default free trial</p>
+          <p className="text-sm text-slate-500">Every newly registered coaching gets all Premium features free for this many days. To give one coaching more or fewer days, open <b>Institutes → Manage</b>.</p>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          {[0, 7, 14, 30, 60].map((d) => (
+            <Button key={d} size="sm" variant={days === String(d) ? 'primary' : 'secondary'} onClick={() => setDays(String(d))}>{d ? `${d} days` : 'No trial'}</Button>
+          ))}
+          <Input label="Days" type="number" min={0} max={365} value={days} onChange={(e) => setDays(e.target.value)} className="w-24" />
+          <Button loading={saving} disabled={!valid || String(data?.trialDays) === days} onClick={save}>Save</Button>
+        </div>
       </div>
     </div>
   );

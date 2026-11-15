@@ -1,4 +1,4 @@
-import { Bell, CalendarCheck, CheckCheck, IndianRupee, Megaphone, ClipboardList, Info, Wallet } from 'lucide-react';
+import { Banknote, Bell, CalendarOff, FolderOpen, UserPlus, CalendarCheck, CheckCheck, IndianRupee, Megaphone, ClipboardList, Info, UserCheck, Wallet, ClipboardCheck } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -17,6 +17,12 @@ export const NOTIF_ICON = {
   test: { icon: ClipboardList, cls: 'bg-violet-50 text-violet-600' },
   announcement: { icon: Megaphone, cls: 'bg-pink-50 text-pink-600' },
   system: { icon: Info, cls: 'bg-slate-100 text-slate-600' },
+  salary: { icon: Banknote, cls: 'bg-emerald-50 text-emerald-700' },
+  staff: { icon: UserCheck, cls: 'bg-brand-50 text-brand-600' },
+  lead: { icon: UserPlus, cls: 'bg-violet-50 text-violet-600' },
+  leave: { icon: CalendarOff, cls: 'bg-sky-50 text-sky-600' },
+  material: { icon: FolderOpen, cls: 'bg-amber-50 text-amber-600' },
+  report: { icon: ClipboardCheck, cls: 'bg-emerald-50 text-emerald-600' },
 } as const;
 
 export function NotificationBell({ allHref }: { allHref: string }) {
@@ -52,7 +58,7 @@ export function NotificationBell({ allHref }: { allHref: string }) {
   // Poll only as a fallback: while the live connection is down and the tab is visible.
   useEffect(() => {
     if (connected) return;
-    const t = setInterval(() => document.visibilityState === 'visible' && load(), 120_000);
+    const t = setInterval(() => document.visibilityState === 'visible' && load(), 30_000);
     return () => clearInterval(t);
   }, [connected]);
 

@@ -105,6 +105,8 @@ r.get(
       digestMemo(instituteId, `${ymd()}|${threshold}|${batchIds ? batchIds.map(String).sort().join(',') : 'all'}`, () => attendanceDigest(instituteId, threshold, batchIds)),
     ]);
     const { absentAlerts, trend, todayAttendance } = digest;
+    // Today is in the holiday list (Settings) → no "mark attendance" nagging.
+    const holiday = (req.institute?.settings?.holidays ?? []).find((h) => h.date === ymd())?.name ?? null;
 
     if (req.user.role === 'teacher') {
       const myStudents = await Student.countDocuments({ instituteId, status: 'active', batchIds: { $in: batchIds } });
@@ -119,6 +121,7 @@ r.get(
       ]);
       return res.json({
         role: 'teacher',
+        holiday,
         counts: { batches: activeBatches, students: myStudents, testsPending: pendingTests.total },
         todayAttendance,
         classes,
@@ -153,6 +156,7 @@ r.get(
 
     res.json({
       role: 'owner',
+      holiday,
       counts: { students, teachers, batches },
       todayAttendance,
       fees: {

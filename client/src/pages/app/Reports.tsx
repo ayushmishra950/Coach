@@ -15,7 +15,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useApi, useClientPage, useDebounced, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
-import { downloadCSV, fmtDate, fmtDateShort, inr, inrShort, parseYmd, pctTone } from '../../lib/format';
+import { downloadCSV, fmtDate, fmtDateShort, inr, inrShort, parseYmd, pctTone, ymd } from '../../lib/format';
 
 const PALETTE = ['#6366f1', '#8b5cf6', '#ec4899', '#10b981', '#f59e0b', '#0ea5e9'];
 
@@ -197,7 +197,7 @@ function StudentsReport() {
     try {
       const { data: all } = await api.get<StudentRow[]>('/reports/students/export', { params: query });
       if (!all.length) return toast.error('Nothing to export');
-      downloadCSV(`student-report-${new Date().toISOString().slice(0, 10)}`, all.map((r) => ({
+      downloadCSV(`student-report-${ymd()}`, all.map((r) => ({
         'Student Code': r.studentCode, Name: r.name, Batches: r.batches,
         'Attendance %': r.attendancePct ?? '', Classes: r.classes, 'Avg Score %': r.avgScore ?? '', Tests: r.tests,
         'Fee Paid': r.feePaid, 'Fee Pending': r.feePending, 'Fee Overdue': r.feeOverdue,

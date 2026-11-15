@@ -16,6 +16,17 @@ const batchSchema = new Schema(
     capacity: Number,
     color: { type: String, default: '#6366f1' },
     active: { type: Boolean, default: true },
+    /** Syllabus topics for this batch — teachers tick them off as they finish them. */
+    syllabus: [
+      {
+        title: { type: String, required: true },
+        subject: String,
+        plannedDate: Date,
+        done: { type: Boolean, default: false },
+        doneAt: Date,
+        doneByName: String,
+      },
+    ],
   },
   { timestamps: true },
 );

@@ -1,8 +1,10 @@
 import bcrypt from 'bcryptjs';
 import { Router, type Request } from 'express';
+import type { Types } from 'mongoose';
 import { allow, auth, tid } from '../middleware/auth.js';
 import { Batch, Student, User } from '../models/index.js';
 import { audit } from '../services/audit.js';
+import { bumpData } from '../utils/cache.js';
 import { getEffectivePlan } from '../services/plan.js';
 import { disconnectUser } from '../services/realtime.js';
 import { parseDate } from '../utils/dates.js';
@@ -73,6 +75,29 @@ async function unassignTeacher(req: Request, teacherId: unknown) {
     Batch.updateMany({ instituteId, coTeacherIds: tidObj }, { $pull: { coTeacherIds: tidObj } }),
   ]);
   return affected.map((b) => b.name);
+}
+
+/**
+ * Batches picked on the teacher form. A picked batch without a lead teacher gets this teacher
+ * as its lead; one that already has a lead gets them as a co-teacher. Unpicked batches drop them.
+ */
+async function setTeacherBatches(req: Request, teacherId: Types.ObjectId, ids: unknown) {
+  if (!Array.isArray(ids)) return;
+  const instituteId = tid(req);
+  const wanted = [...new Set(ids.map(String))].slice(0, 50).map((x) => oid(x));
+  const found = await Batch.find({ instituteId, _id: { $in: wanted } }).select('teacherId coTeacherIds').lean();
+  if (found.length !== wanted.length) throw new HttpError(400, 'One of the selected batches was not found');
+  // Off the (active) batches that were not picked — inactive history is left as it was.
+  await Promise.all([
+    Batch.updateMany({ instituteId, active: true, teacherId, _id: { $nin: wanted } }, { $unset: { teacherId: 1 } }),
+    Batch.updateMany({ instituteId, active: true, coTeacherIds: teacherId, _id: { $nin: wanted } }, { $pull: { coTeacherIds: teacherId } }),
+  ]);
+  for (const b of found) {
+    if (String(b.teacherId ?? '') === String(teacherId)) continue;
+    if (!b.teacherId) await Batch.updateOne({ _id: b._id }, { $set: { teacherId }, $pull: { coTeacherIds: teacherId } });
+    else await Batch.updateOne({ _id: b._id }, { $addToSet: { coTeacherIds: teacherId } });
+  }
+  bumpData(instituteId);
 }
 
 /** Teachers list — 20 per page (active first). */
@@ -148,12 +173,14 @@ r.post(
       if (existing.role === 'teacher' && String(existing.instituteId) === String(instituteId) && !existing.active) {
         existing.set({ ...set, active: true, password: await bcrypt.hash(password, 10), tokenVersion: (existing.tokenVersion ?? 0) + 1 });
         await existing.save();
+        await setTeacherBatches(req, existing._id, req.body.batchIds);
         audit(req, 'teacher.reactivate', 'User', existing._id, existing.name);
         return res.status(201).json({ teacher: safeUser(existing), credentials: { email, password }, reactivated: true });
       }
       throw new HttpError(409, existing.role === 'teacher' && String(existing.instituteId) === String(instituteId) ? 'This teacher is already on your staff' : 'This email is already used by another account');
     }
     const teacher = await User.create({ ...set, email, password: await bcrypt.hash(password, 10), role: 'teacher', instituteId });
+    await setTeacherBatches(req, teacher._id, req.body.batchIds);
     audit(req, 'teacher.create', 'User', teacher._id, `${teacher.name} <${email}>`);
     res.status(201).json({ teacher: safeUser(teacher), credentials: { email: teacher.email, password } });
   }),
@@ -190,6 +217,7 @@ r.put(
       { new: true, runValidators: true },
     );
     if (set.active === false) disconnectUser(t._id);
+    else if (updated!.active) await setTeacherBatches(req, t._id, req.body?.batchIds);
     res.json({ ...updated!.toObject(), unassignedBatches: unassigned });
   }),
 );

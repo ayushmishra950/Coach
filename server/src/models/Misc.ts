@@ -6,7 +6,7 @@ export type Channel = (typeof CHANNELS)[number];
 const notificationSchema = new Schema(
   {
     instituteId: { type: Schema.Types.ObjectId, ref: 'Institute', index: true },
-    type: { type: String, enum: ['attendance', 'fee', 'test', 'announcement', 'system', 'payment'], required: true },
+    type: { type: String, enum: ['attendance', 'fee', 'test', 'announcement', 'system', 'payment', 'salary', 'staff', 'lead', 'leave', 'material', 'report'], required: true },
     title: { type: String, required: true },
     message: { type: String, required: true },
     audience: { type: String, enum: ['owner', 'staff', 'parent'], required: true },
@@ -42,6 +42,10 @@ const announcementSchema = new Schema(
     pinned: { type: Boolean, default: false },
     /** Visible to the owner and teachers only — never sent to parents. */
     staffOnly: { type: Boolean, default: false },
+    /** Notice board category; holidays / PTM / extra classes carry the date they happen on. */
+    category: { type: String, enum: ['general', 'holiday', 'ptm', 'extra_class', 'exam', 'event'], default: 'general' },
+    eventDate: Date,
+    eventEndDate: Date,
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     createdByName: String,
     editedAt: Date,
@@ -109,4 +113,6 @@ const lockSchema = new Schema({
   until: { type: Date, required: true },
   owner: String,
 });
+// Expired locks (e.g. one-a-day digest keys) are cleaned up a day after they run out.
+lockSchema.index({ until: 1 }, { expireAfterSeconds: 86400 });
 export const Lock = model('Lock', lockSchema);

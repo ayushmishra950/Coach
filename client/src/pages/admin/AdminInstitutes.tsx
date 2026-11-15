@@ -11,7 +11,7 @@ import {
 import { Pager } from '../../components/Pager';
 import { useApi, useDebounced, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
-import { fmtDate, fmtDateTime, initials, inr, timeAgo } from '../../lib/format';
+import { fmtDate, fmtDateTime, initials, inr, timeAgo, ymd } from '../../lib/format';
 import type { Plan, PlanKey } from '../../lib/types';
 
 type InstStatus = 'trial' | 'active' | 'past_due' | 'cancelled' | 'suspended';
@@ -197,6 +197,10 @@ function ManageModal({ inst, plans, onClose, onSaved }: { inst: AdminInstitute |
   const [plan, setPlan] = useState<PlanKey>('starter');
   const [status, setStatus] = useState<InstStatus>('active');
   const [extend, setExtend] = useState('');
+  // Trial: change by ±days, set the exact last day, or end it now (only one at a time).
+  const [trialMode, setTrialMode] = useState<'length' | 'days' | 'date' | 'end'>('length');
+  const [trialLength, setTrialLength] = useState('');
+  const [trialDate, setTrialDate] = useState('');
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -211,6 +215,9 @@ function ManageModal({ inst, plans, onClose, onSaved }: { inst: AdminInstitute |
       setPlan(inst.plan);
       setStatus(inst.status);
       setExtend('');
+      setTrialMode('length');
+      setTrialLength(inst.trialEndsAt ? String(Math.max(0, Math.round((new Date(inst.trialEndsAt).getTime() - new Date(inst.createdAt).getTime()) / 86400000))) : '');
+      setTrialDate(inst.trialEndsAt ? ymd(new Date(inst.trialEndsAt)) : '');
       setCreds(null);
       setConfirmReset(false);
       setResetReason('');
@@ -223,14 +230,36 @@ function ManageModal({ inst, plans, onClose, onSaved }: { inst: AdminInstitute |
   if (!inst) return null;
   const planInfo = plans.find((p) => p.key === plan);
   const extendDays = Number(extend) || 0;
-  const dirty = plan !== inst.plan || status !== inst.status || extendDays > 0;
+  const currentEnd = inst.trialEndsAt ? ymd(new Date(inst.trialEndsAt)) : '';
+  const lengthN = Number(trialLength);
+  const lengthValid = trialLength !== '' && Number.isInteger(lengthN) && lengthN >= 0 && lengthN <= 730;
+  const currentLength = inst.trialEndsAt ? String(Math.max(0, Math.round((new Date(inst.trialEndsAt).getTime() - new Date(inst.createdAt).getTime()) / 86400000))) : '';
+  const trialDirty = (trialMode === 'length' && lengthValid && trialLength !== currentLength) || trialMode === 'end' || (trialMode === 'days' && extendDays !== 0) || (trialMode === 'date' && !!trialDate && trialDate !== currentEnd);
+  const dirty = plan !== inst.plan || status !== inst.status || trialDirty;
+  // What the new last trial day will be, for the preview line.
+  const previewEnd = (() => {
+    if (trialMode === 'end') return new Date();
+    if (trialMode === 'length') return lengthValid ? (lengthN === 0 ? new Date() : new Date(new Date(inst.createdAt).getTime() + lengthN * 86400000)) : null;
+    if (trialMode === 'date') return trialDate ? new Date(`${trialDate}T23:59:59`) : null;
+    if (!extendDays) return null;
+    const now = new Date();
+    const cur = inst.trialEndsAt ? new Date(inst.trialEndsAt) : null;
+    const base = extendDays > 0 && !(cur && cur > now) ? now : (cur ?? now);
+    return new Date(base.getTime() + extendDays * 86400000);
+  })();
+  const currentLeft = inst.trialEndsAt ? Math.ceil((new Date(inst.trialEndsAt).getTime() - Date.now()) / 86400000) : null;
   const activating = status === 'active' && inst.status !== 'active';
 
   const save = async () => {
-    const body: { plan?: PlanKey; status?: InstStatus; extendTrialDays?: number; offlinePayment?: { amount: number; reference: string } } = {};
+    const body: { plan?: PlanKey; status?: InstStatus; trialAdjustDays?: number; trialLengthDays?: number; trialEndsAt?: string; endTrialNow?: boolean; offlinePayment?: { amount: number; reference: string } } = {};
     if (plan !== inst.plan) body.plan = plan;
     if (status !== inst.status) body.status = status;
-    if (extendDays > 0) body.extendTrialDays = extendDays;
+    if (trialDirty) {
+      if (trialMode === 'end') body.endTrialNow = true;
+      else if (trialMode === 'length') body.trialLengthDays = lengthN;
+      else if (trialMode === 'date') body.trialEndsAt = trialDate;
+      else body.trialAdjustDays = extendDays;
+    }
     if (activating && recordPay) {
       const amount = Number(payAmount);
       if (!Number.isFinite(amount) || amount <= 0) return toast.error('Enter the amount received');
@@ -341,16 +370,56 @@ function ManageModal({ inst, plans, onClose, onSaved }: { inst: AdminInstitute |
         )}
 
         <div className="rounded-2xl border border-dashed border-brand-200 bg-brand-50/40 p-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <Input label="Extend trial by (days)" type="number" min={1} max={365} placeholder="e.g. 7" value={extend}
-              onChange={(e) => setExtend(e.target.value)} className="sm:w-48" />
-            <div className="flex gap-2">
-              {[7, 14, 30].map((d) => (
-                <Button key={d} size="sm" variant={extendDays === d ? 'primary' : 'secondary'} onClick={() => setExtend(String(d))}>+{d}d</Button>
-              ))}
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-bold text-slate-800">Free trial</p>
+              <p className="text-xs text-slate-500">
+                {inst.trialEndsAt
+                  ? currentLeft != null && currentLeft > 0 ? <>Ends <b>{fmtDate(inst.trialEndsAt)}</b> · {currentLeft} day{currentLeft === 1 ? '' : 's'} left</> : <>Ended on <b>{fmtDate(inst.trialEndsAt)}</b></>
+                  : 'No trial on this account'}
+              </p>
             </div>
+            <Tabs<'length' | 'days' | 'date' | 'end'> value={trialMode} onChange={setTrialMode} tabs={[
+              { value: 'length', label: 'Trial days' }, { value: 'days', label: '± Days' }, { value: 'date', label: 'Set last day' }, { value: 'end', label: 'End now' },
+            ]} />
           </div>
-          <p className="mt-2 text-xs text-slate-500">Extending the trial also sets the status to <b>Trial</b>. Days are added to the current trial end (or today if already expired).</p>
+          {trialMode === 'length' && (
+            <div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <div className="flex flex-wrap gap-2">
+                  {[0, 7, 14, 30, 60, 90].map((d) => (
+                    <Button key={d} size="sm" variant={trialLength === String(d) ? 'primary' : 'secondary'} onClick={() => setTrialLength(String(d))}>{d ? `${d} days` : 'No trial'}</Button>
+                  ))}
+                </div>
+                <Input label="Days" type="number" min={0} max={730} value={trialLength} onChange={(e) => setTrialLength(e.target.value)} className="w-28" />
+              </div>
+              <p className="mt-2 text-xs text-slate-500">Total free trial for this coaching, counted from the day it joined ({fmtDate(inst.createdAt)}). Same as the default on Plans & Pricing, but only for this coaching.</p>
+            </div>
+          )}
+          {trialMode === 'days' && (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <Input label="Add or remove days" type="number" min={-365} max={365} placeholder="e.g. 15 or -5" value={extend}
+                onChange={(e) => setExtend(e.target.value)} className="sm:w-48" hint="Negative number = shorten the trial" />
+              <div className="flex flex-wrap gap-2">
+                {[-7, 7, 15, 30, 60].map((d) => (
+                  <Button key={d} size="sm" variant={extendDays === d ? 'primary' : 'secondary'} onClick={() => setExtend(String(d))}>{d > 0 ? `+${d}` : d}d</Button>
+                ))}
+              </div>
+            </div>
+          )}
+          {trialMode === 'date' && (
+            <Input label="Last day of the trial" type="date" value={trialDate} onChange={(e) => setTrialDate(e.target.value)} className="sm:w-60"
+              hint="The trial runs until the end of this day. Pick a past date to end it." />
+          )}
+          {trialMode === 'end' && <p className="text-sm text-slate-700">The trial ends right away and the institute moves to <b>Starter</b> features until it picks a plan. No data is deleted.</p>}
+          {previewEnd && trialDirty && (
+            <p className={clsx('mt-3 rounded-lg px-3 py-2 text-xs font-semibold', previewEnd > new Date() ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800')}>
+              {previewEnd > new Date()
+                ? `New trial end: ${fmtDate(previewEnd)} (${Math.ceil((previewEnd.getTime() - Date.now()) / 86400000)} days from today)${inst.status !== 'trial' && inst.status !== 'active' ? ' · status becomes Trial' : ''}`
+                : 'Trial will be over — Starter features until a plan is bought'}
+            </p>
+          )}
+          {inst.status === 'active' && trialDirty && <p className="mt-2 text-xs text-slate-500">This institute is on a paid plan, so its status stays Active — the trial date is only saved for the record.</p>}
         </div>
 
         {/* Owner login help */}

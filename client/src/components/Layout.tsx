@@ -1,6 +1,7 @@
 import {
   BarChart3, Bell, BookOpen, Building2, CalendarCheck, ClipboardList, CreditCard, Crown, GraduationCap, IndianRupee,
-  LayoutDashboard, LifeBuoy, LogOut, Megaphone, Menu, MessageCircle, ScrollText, Settings, Sparkles, UserRound, UserSquare2, X, type LucideIcon,
+  ClipboardCheck, LayoutDashboard, LifeBuoy, LogOut, Megaphone, Menu, MessageCircle, ScrollText, Settings, Sparkles, UserRound, UserSquare2, X, type LucideIcon,
+  Banknote, Fingerprint, BookOpenCheck, CalendarDays, CalendarOff, FolderOpen, Globe, UserPlus,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -16,16 +17,26 @@ interface NavItem { to: string; label: string; icon: LucideIcon; end?: boolean; 
 
 const OWNER_NAV: NavItem[] = [
   { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/app/leads', label: 'Enquiries', icon: UserPlus, section: 'Admissions' },
+  { to: '/app/courses', label: 'Courses', icon: BookOpenCheck },
+  { to: '/app/website', label: 'Website', icon: Globe },
   { to: '/app/teachers', label: 'Teachers', icon: UserSquare2, section: 'Manage' },
+  { to: '/app/staff', label: 'Staff check-in', icon: Fingerprint },
+  { to: '/app/work-reports', label: 'Work reports', icon: ClipboardCheck },
+  { to: '/app/salaries', label: 'Salaries', icon: Banknote },
   { to: '/app/batches', label: 'Batches', icon: BookOpen },
    { to: '/app/students', label: 'Students', icon: GraduationCap },
   { to: '/app/attendance', label: 'Attendance', icon: CalendarCheck, section: 'Daily work' },
+  { to: '/app/timetable', label: 'Timetable & syllabus', icon: CalendarDays },
+  { to: '/app/leaves', label: 'Leave requests', icon: CalendarOff },
   { to: '/app/fees', label: 'Fees', icon: IndianRupee },
   { to: '/app/tests', label: 'Tests & Marks', icon: ClipboardList },
+  { to: '/app/materials', label: 'Study material', icon: FolderOpen },
   { to: '/app/messages', label: 'Messages', icon: MessageCircle, chatBadge: true },
   { to: '/app/announcements', label: 'Announcements', icon: Megaphone },
   { to: '/app/reports', label: 'Reports', icon: BarChart3, section: 'Insights' },
-  { to: '/app/insights', label: 'AI Insights', icon: Sparkles, feature: 'aiInsights' },
+  // AI Insights is hidden from the menu for now (the page still works at /app/insights).
+  // { to: '/app/insights', label: 'AI Insights', icon: Sparkles, feature: 'aiInsights' },
   { to: '/app/notifications', label: 'Notifications', icon: Bell },
   { to: '/app/subscription', label: 'Subscription', icon: Crown, section: 'Account' },
   { to: '/app/settings', label: 'Settings', icon: Settings },
@@ -34,8 +45,13 @@ const OWNER_NAV: NavItem[] = [
 
 const TEACHER_NAV: NavItem[] = [
   { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/app/attendance', label: 'Attendance', icon: CalendarCheck, section: 'Daily work' },
+  { to: '/app/my-attendance', label: 'Check-in & salary', icon: Fingerprint, section: 'Daily work' },
+  { to: '/app/daily-report', label: 'Daily report', icon: ClipboardCheck },
+  { to: '/app/attendance', label: 'Attendance', icon: CalendarCheck },
+  { to: '/app/timetable', label: 'Timetable & syllabus', icon: CalendarDays },
   { to: '/app/tests', label: 'Tests & Marks', icon: ClipboardList },
+  { to: '/app/materials', label: 'Study material', icon: FolderOpen },
+  { to: '/app/leaves', label: 'Leave requests', icon: CalendarOff },
   { to: '/app/batches', label: 'My Batches', icon: BookOpen },
   { to: '/app/students', label: 'My Students', icon: GraduationCap },
   { to: '/app/messages', label: 'Messages', icon: MessageCircle, chatBadge: true },

@@ -4,6 +4,7 @@ import { allow, auth, scopedBatchIds, tid } from '../middleware/auth.js';
 import { Announcement, Batch, Student, type InstituteDoc } from '../models/index.js';
 import { notify, notifyMany, type NotifyInput } from '../services/notify.js';
 import { HttpError, ah, oid, required } from '../utils/http.js';
+import { parseDate } from '../utils/dates.js';
 import { pageParams, paged } from '../utils/paginate.js';
 import { rateLimit } from '../utils/security.js';
 
@@ -55,8 +56,19 @@ function clean(body: Record<string, unknown>) {
   const title = String(body.title ?? '').trim().slice(0, 150);
   const text = String(body.body ?? '').trim().slice(0, 3000);
   if (!title || !text) throw new HttpError(400, 'Title and message are required');
-  return { title, body: text };
+  const out: Record<string, unknown> = { title, body: text };
+  // Notice-board category; holiday / PTM / extra class / exam / event carry a date.
+  if (body.category !== undefined) {
+    const c = String(body.category);
+    out.category = CATEGORIES.includes(c) ? c : 'general';
+  }
+  if (body.eventDate !== undefined) out.eventDate = body.eventDate ? parseDate(body.eventDate, 'Event date') : null;
+  if (body.eventEndDate !== undefined) out.eventEndDate = body.eventEndDate ? parseDate(body.eventEndDate, 'End date') : null;
+  if (out.category && out.category !== 'general' && !out.eventDate && body.eventDate !== undefined) throw new HttpError(400, 'Pick the date for this notice');
+  return out as { title: string; body: string };
 }
+
+const CATEGORIES = ['general', 'holiday', 'ptm', 'extra_class', 'exam', 'event'];
 
 r.get(
   '/',
@@ -79,7 +91,7 @@ r.post(
   ah(async (req, res) => {
     const instituteId = tid(req);
     required(req.body ?? {}, ['title', 'body']);
-    const { title, body } = clean(req.body);
+    const { title, body, ...extra } = clean(req.body) as { title: string; body: string } & Record<string, unknown>;
     const scoped = await scopedBatchIds(req);
     let batchIds: Types.ObjectId[] = Array.isArray(req.body.batchIds) ? req.body.batchIds.map(oid) : [];
     if (scoped) {
@@ -95,6 +107,7 @@ r.post(
       instituteId,
       title,
       body,
+      ...extra,
       batchIds,
       staffOnly,
       pinned: !!req.body.pinned && req.user.role === 'owner',

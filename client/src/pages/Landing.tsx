@@ -4,6 +4,7 @@ import {
   MessageSquare, Minus, NotebookPen, Play, School, Smartphone, Sparkles, Stethoscope, UserSquare2, Users, X, Zap,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
+import { trialLabel, useTrialDays } from '../hooks/useTrialDays';
 import { Link } from 'react-router-dom';
 import { Logo, LogoMark } from '../components/Logo';
 import { clsx } from '../components/ui';
@@ -209,6 +210,8 @@ function DashboardMockup() {
 /* ────────────────────────── sections ────────────────────────── */
 
 function Hero() {
+  const trialDays = useTrialDays();
+  const trial = trialLabel(trialDays);
   return (
     <section className="relative overflow-hidden pb-24 pt-10 sm:pt-16">
       <div className="absolute inset-0 -z-10 grid-bg [mask-image:radial-gradient(ellipse_at_top,black_30%,transparent_70%)]" />
@@ -229,7 +232,7 @@ function Hero() {
             <Link to="/register" className="btn-premium px-6 py-3.5 text-base">Start free trial <ArrowRight className="h-5 w-5" /></Link>
             <a href="#features" className="btn-secondary px-6 py-3.5 text-base"><Play className="h-4 w-4 text-brand-600" /> See features</a>
           </div>
-          <p className="mt-4 text-sm font-medium text-slate-500">✨ 30-day free pilot · No card needed · Setup in 10 minutes</p>
+          <p className="mt-4 text-sm font-medium text-slate-500">✨ {trial ? `${trial} free pilot · ` : ''}No card needed · Setup in 10 minutes</p>
         </div>
         <div className="animate-fade-up [animation-delay:.15s]"><DashboardMockup /></div>
       </div>
@@ -435,6 +438,8 @@ function Cell({ v }: { v: string | boolean }) {
 }
 
 function Pricing() {
+  const trialDays = useTrialDays();
+  const trial = trialLabel(trialDays);
   const [plans, setPlans] = useState<Plan[]>(FALLBACK_PLANS);
   const [yearly, setYearly] = useState(false);
   useEffect(() => {
@@ -446,7 +451,7 @@ function Pricing() {
   return (
     <section id="pricing" className="relative scroll-mt-20 bg-slate-50 py-20 sm:py-28">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <SectionTitle eyebrow="Pricing" title="Simple pricing. Less than one student's monthly fee." text="Start with a 30-day free pilot with every Premium feature. Pick a plan only when you're convinced." />
+        <SectionTitle eyebrow="Pricing" title="Simple pricing. Less than one student's monthly fee." text={trial ? `Start with a ${trial} free pilot with every Premium feature. Pick a plan only when you're convinced.` : 'Start free on Starter and upgrade only when you are convinced.'} />
         <div className="mt-8 flex justify-center">
           <div className="inline-flex items-center rounded-full bg-white p-1 shadow-soft ring-1 ring-slate-200">
             {(['monthly', 'yearly'] as const).map((c) => (
@@ -535,8 +540,10 @@ function Pricing() {
 }
 
 function FAQ() {
+  const trialDays = useTrialDays();
+  const trial = trialLabel(trialDays);
   const qs = [
-    { q: 'Is there really a free trial?', a: 'Yes. Every new institute gets a 30-day free pilot with all Premium features. No credit card is needed to start.' },
+    { q: 'Is there really a free trial?', a: trial ? `Yes. Every new institute gets a ${trial} free pilot with all Premium features. No credit card is needed to start.` : 'You can start free on the Starter plan and upgrade any time. No credit card is needed to start.' },
     { q: 'Do my teachers and parents need to install an app?', a: 'No. CoachFlow works in any browser on phone, tablet or computer. Teachers and parents simply log in with their email.' },
     { q: 'How do parent notifications work?', a: 'Parents with a portal login get absence alerts, fee reminders and results inside CoachFlow, live. WhatsApp, SMS and email delivery depend on the messaging provider connected to your account.' },
     { q: 'Can I import my existing students?', a: 'Yes. You can add students one by one or bulk-import them from a CSV file (save your Excel sheet as CSV) in a few minutes.' },
@@ -565,6 +572,8 @@ function FAQ() {
 }
 
 function FinalCTA() {
+  const trialDays = useTrialDays();
+  const trial = trialLabel(trialDays);
   return (
     <section className="bg-white px-4 py-20 sm:px-6 lg:px-8">
       <div className="relative mx-auto max-w-6xl overflow-hidden rounded-[2rem] bg-gradient-to-br from-brand-700 via-violet-700 to-fuchsia-700 px-6 py-16 text-center text-white shadow-glow sm:px-12">
@@ -573,12 +582,12 @@ function FinalCTA() {
         <div className="relative">
           <Zap className="mx-auto h-10 w-10 text-amber-300" />
           <h2 className="mx-auto mt-4 max-w-2xl text-3xl font-extrabold tracking-tight sm:text-4xl">Give your institute the dashboard it deserves.</h2>
-          <p className="mx-auto mt-4 max-w-xl text-white/80">Set up in 10 minutes. Try every Premium feature free for 30 days.</p>
+          <p className="mx-auto mt-4 max-w-xl text-white/80">Set up in 10 minutes.{trial ? ` Try every Premium feature free for ${trialDays} days.` : ''}</p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
             <Link to="/register" className="btn bg-white px-6 py-3.5 text-base text-brand-700 hover:bg-amber-50">Start free trial <ArrowRight className="h-5 w-5" /></Link>
             <Link to="/login" className="btn border border-white/30 px-6 py-3.5 text-base text-white hover:bg-white/10">Login</Link>
           </div>
-          <p className="mt-4 text-sm text-white/70">30-day free pilot · No card needed</p>
+          <p className="mt-4 text-sm text-white/70">{trial ? `${trial} free pilot · ` : ''}No card needed</p>
         </div>
       </div>
     </section>

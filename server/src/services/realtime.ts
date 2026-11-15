@@ -32,6 +32,11 @@ export function emitToUser(userId: unknown, event: string, payload: unknown) {
   io?.to(`user:${String(userId)}`).emit(event, payload);
 }
 
+/** Live event to everyone of one role in an institute (e.g. owners watching staff check-ins). */
+export function emitToInstituteRole(instituteId: unknown, role: 'owner' | 'teacher' | 'parent', event: string, payload: unknown) {
+  io?.to(`inst:${String(instituteId)}:${role}`).emit(event, payload);
+}
+
 /** Pushes a freshly created in-app notification to everyone who should see it. */
 export function emitNotification(n: {
   _id: unknown; instituteId?: unknown; audience: string; studentId?: unknown; userId?: unknown;

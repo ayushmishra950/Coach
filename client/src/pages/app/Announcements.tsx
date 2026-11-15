@@ -2,18 +2,21 @@ import { Check, Globe, Lock, Megaphone, Pencil, Pin, PinOff, Send, Trash2, Users
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Avatar, Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, ErrorState, Input, Modal, PageHeader, Skeleton, Textarea, Toggle, clsx,
+  Avatar, Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, ErrorState, Input, Modal, PageHeader, Select, Skeleton, Textarea, Toggle, clsx,
 } from '../../components/ui';
 import { Pager } from '../../components/Pager';
 import { useAuth } from '../../context/AuthContext';
 import { useApi, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
-import { fmtDateTime, timeAgo } from '../../lib/format';
+import { fmtDate, fmtDateTime, timeAgo } from '../../lib/format';
+import { NOTICE_CATEGORIES, noticeCategory as catOf } from '../../lib/notice';
 import type { Announcement } from '../../lib/types';
 
 interface BatchOption { _id: string; name: string; color?: string }
 /** Announcement with the newer server fields. */
-type Item = Announcement & { staffOnly?: boolean; editedAt?: string };
+type Item = Announcement & { staffOnly?: boolean; editedAt?: string; category?: string; eventDate?: string; eventEndDate?: string };
+
+
 
 export default function Announcements() {
   const { session } = useAuth();
@@ -114,6 +117,9 @@ export default function Announcements() {
                             {a.pinned && <span title="Pinned">📌</span>}
                             <h4 className="font-bold text-slate-900">{a.title}</h4>
                             {a.staffOnly && <Badge tone="amber"><Lock className="h-3 w-3" /> Staff only</Badge>}
+                            {a.category && a.category !== 'general' && (
+                              <Badge tone="violet">{catOf(a.category)?.emoji} {catOf(a.category)?.label}{a.eventDate ? ` · ${fmtDate(a.eventDate, { day: 'numeric', month: 'short' })}${a.eventEndDate && a.eventEndDate !== a.eventDate ? `–${fmtDate(a.eventEndDate, { day: 'numeric', month: 'short' })}` : ''}` : ''}</Badge>
+                            )}
                           </div>
                           <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-slate-600">{a.body}</p>
                           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
@@ -181,6 +187,9 @@ function Composer({ isOwner, batches, onSent }: { isOwner: boolean; batches: Bat
   const [selected, setSelected] = useState<string[]>([]);
   const [pinned, setPinned] = useState(false);
   const [staffOnly, setStaffOnly] = useState(false);
+  const [category, setCategory] = useState('general');
+  const [eventDate, setEventDate] = useState('');
+  const [eventEndDate, setEventEndDate] = useState('');
   const [sending, setSending] = useState(false);
 
   const toggleBatch = (id: string) => {
@@ -194,10 +203,14 @@ function Composer({ isOwner, batches, onSent }: { isOwner: boolean; batches: Bat
     const batchIds = everyone ? [] : selected;
     if (!isOwner && !batchIds.length) return toast.error('Select at least one of your batches');
     if (isOwner && !everyone && !batchIds.length) return toast.error('Choose "Everyone" or at least one batch');
+    if (category !== 'general' && !eventDate) return toast.error('Pick the date for this notice');
     setSending(true);
     try {
       const isStaff = isOwner && staffOnly;
-      const { data } = await api.post<{ recipients: number }>('/announcements', { title: title.trim(), body: body.trim(), batchIds, pinned: isOwner && pinned, staffOnly: isStaff });
+      const { data } = await api.post<{ recipients: number }>('/announcements', {
+        title: title.trim(), body: body.trim(), batchIds, pinned: isOwner && pinned, staffOnly: isStaff,
+        category, eventDate: category !== 'general' ? eventDate : null, eventEndDate: category !== 'general' && eventEndDate ? eventEndDate : null,
+      });
       const n = data.recipients ?? 0;
       toast.success(isStaff ? 'Posted for staff only — not sent to parents' : n > 0 ? `Posted — sending to ${n} famil${n === 1 ? 'y' : 'ies'} in the background` : 'Posted — no families to notify in this audience');
       setTitle('');
@@ -205,6 +218,9 @@ function Composer({ isOwner, batches, onSent }: { isOwner: boolean; batches: Bat
       setSelected([]);
       setPinned(false);
       setStaffOnly(false);
+      setCategory('general');
+      setEventDate('');
+      setEventEndDate('');
       setEveryone(isOwner);
       onSent();
     } catch (e) {
@@ -220,6 +236,17 @@ function Composer({ isOwner, batches, onSent }: { isOwner: boolean; batches: Bat
       <form onSubmit={submit} className="space-y-4">
         <Input label="Title" placeholder="e.g. Holiday on Monday" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={150} />
         <Textarea label="Message" placeholder="Write your announcement…" value={body} onChange={(e) => setBody(e.target.value)} rows={5} maxLength={3000} />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Select label="Type" value={category} onChange={(e) => setCategory(e.target.value)} className={category === 'general' ? 'sm:col-span-2' : ''}>
+            {NOTICE_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.emoji} {c.label}</option>)}
+          </Select>
+          {category !== 'general' && (
+            <>
+              <Input label="Date *" type="date" value={eventDate} onChange={(e) => setEventDate(e.target.value)} />
+              {(category === 'holiday' || category === 'event') && <Input label="Till (optional)" type="date" value={eventEndDate} min={eventDate} onChange={(e) => setEventEndDate(e.target.value)} className="sm:col-span-2" />}
+            </>
+          )}
+        </div>
         <div>
           <span className="label">Audience</span>
           <div className="flex flex-wrap gap-2">

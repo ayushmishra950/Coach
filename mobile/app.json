@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "CoachFlow",
+    "slug": "coachflow",
+    "scheme": "coachflow",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": { "supportsTablet": true, "bundleIdentifier": "in.coachflow.app" },
+    "android": {
+      "package": "in.coachflow.app",
+      "adaptiveIcon": { "backgroundColor": "#4f46e5" },
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+    },
+    "web": { "bundler": "metro" },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      ["expo-location", { "locationWhenInUsePermission": "CoachFlow uses your location only when you check in or check out (if your institute asks for it)." }]
+    ],
+    "experiments": { "typedRoutes": false },
+    "extra": {
+      "apiUrl": "http://192.168.1.10:4600"
+    }
+  }
+}

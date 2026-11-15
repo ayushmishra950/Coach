@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { Types } from 'mongoose';
 import { allow, assertBatchAccess, auth, scopedBatchIds, tid } from '../middleware/auth.js';
-import { Attendance, Batch, Student } from '../models/index.js';
+import { Attendance, Batch, LeaveRequest, Student } from '../models/index.js';
 import { audit } from '../services/audit.js';
 import { notify, notifyMany } from '../services/notify.js';
 import { absenceStreaks, pct } from '../services/stats.js';
@@ -35,7 +35,14 @@ r.get(
     const existing = await Attendance.findOne({ instituteId, batchId: batch._id, date }).lean();
     const editDays = req.institute?.settings?.attendanceEditDays ?? 7;
     const locked = req.user.role === 'teacher' && daysBetween(date, ymd()) > editDays;
-    res.json({ batch, date, students, records: existing?.records ?? null, submittedAt: existing?.updatedAt ?? null, holiday: holidayMap(req).get(date) ?? null, locked, editDays });
+    // Approved leave requests from parents for this day (shown next to the name).
+    const leaves = await LeaveRequest.find({ instituteId, status: 'approved', studentId: { $in: students.map((x) => x._id) }, from: { $lte: date }, to: { $gte: date } })
+      .select('studentId reason')
+      .lean();
+    res.json({
+      batch, date, students, records: existing?.records ?? null, submittedAt: existing?.updatedAt ?? null, holiday: holidayMap(req).get(date) ?? null, locked, editDays,
+      onLeave: leaves.map((l) => ({ studentId: l.studentId, reason: l.reason })),
+    });
   }),
 );
 

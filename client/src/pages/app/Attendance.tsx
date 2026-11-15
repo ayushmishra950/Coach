@@ -27,6 +27,8 @@ interface SheetResp {
   date: string;
   students: { _id: string; name: string; studentCode: string }[];
   records: { studentId: string; status: Status }[] | null;
+  /** Approved leave requests from parents for this day. */
+  onLeave?: { studentId: string; reason: string }[];
   submittedAt: string | null;
   holiday?: string | null;
   locked?: boolean;
@@ -244,7 +246,8 @@ function MarkSheet({ batchId, date, onBack, onSaved }: { batchId: string; date: 
     const m: Record<string, Status> = {};
     for (const s of data.students) {
       const rec = data.records?.find((r) => String(r.studentId) === String(s._id));
-      m[s._id] = rec?.status ?? 'present';
+      // Fresh sheet: students on approved leave start as absent.
+      m[s._id] = rec?.status ?? (data.onLeave?.some((l) => String(l.studentId) === String(s._id)) ? 'absent' : 'present');
     }
     setMarks(m);
   }, [data]);
@@ -356,6 +359,10 @@ function MarkSheet({ batchId, date, onBack, onSaved }: { batchId: string; date: 
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-semibold text-slate-900">{s.name}</p>
                   <p className="text-xs text-slate-500">{s.studentCode}</p>
+                  {(() => {
+                    const lv = data.onLeave?.find((l) => String(l.studentId) === String(s._id));
+                    return lv ? <p className="mt-0.5 truncate text-[11px] font-semibold text-sky-700" title={lv.reason}>On approved leave · {lv.reason}</p> : null;
+                  })()}
                 </div>
                 <div className="flex shrink-0 gap-1 rounded-xl bg-slate-100 p-1" onClick={(e) => e.stopPropagation()}>
                   {(['present', 'absent', 'late'] as Status[]).map((k) => (

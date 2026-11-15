@@ -16,6 +16,7 @@ import { api, errMsg } from '../../lib/api';
 import { fmtDate } from '../../lib/format';
 import type { Batch, BatchRef } from '../../lib/types';
 import { TestFormModal } from './Tests';
+import { OnlineTestCard, type OnlineTestData } from '../../components/OnlineTestEditor';
 
 interface Row { student: { _id: string; name: string; studentCode: string }; marks: number | null; absent: boolean; remark: string }
 interface Stats { avg: number | null; highest: number | null; lowest: number | null; passRate: number | null; entered: number }
@@ -23,7 +24,7 @@ interface DetailResp {
   test: {
     _id: string; subject: string; topic?: string; maxMarks: number; date: string; status: 'scheduled' | 'graded' | 'published'; batch: BatchRef; publishedAt?: string;
     passPercent?: number; negativeMarking?: boolean;
-  };
+  } & Omit<OnlineTestData, 'maxMarks' | 'status' | '_id'>;
   rows: Row[];
   stats: Stats;
   analytics: { distribution: { range: string; count: number }[]; toppers: { name: string; marks: number }[]; needsHelp: { name: string; marks: number }[] } | null;
@@ -301,6 +302,8 @@ export default function TestDetail() {
         <StatCard label="Pass rate" value={stats.passRate != null ? `${stats.passRate}%` : '—'} icon={<Award className="h-5 w-5" />} tone="amber" hint={`Pass mark ${passPct}%`} />
         <StatCard label="Entered" value={`${stats.entered}/${rows.length}`} icon={<Users className="h-5 w-5" />} tone="sky" className="col-span-2 lg:col-span-1" />
       </div>
+
+      <OnlineTestCard test={test} onSaved={reload} />
 
       {/* Marks entry */}
       <Card pad={false} className="mb-6">

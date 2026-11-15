@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { Types } from 'mongoose';
 import { allow, assertBatchAccess, auth, scopedBatchIds, tid } from '../middleware/auth.js';
-import { Attendance, Batch, Student, Test, User } from '../models/index.js';
+import { deleteFile } from '../services/files.js';
+import { Attendance, Batch, Course, Lead, Material, Student, Test, User } from '../models/index.js';
 import { audit } from '../services/audit.js';
 import { disconnectUser } from '../services/realtime.js';
 import { attendanceByStudent, pct, scoresByStudent } from '../services/stats.js';
@@ -307,7 +308,16 @@ r.delete(
     }
     const batch = await Batch.findOneAndDelete({ _id: id, instituteId });
     if (!batch) throw new HttpError(404, 'Batch not found');
-    await Student.updateMany({ instituteId, batchIds: batch._id }, { $pull: { batchIds: batch._id } });
+    await Promise.all([
+      Student.updateMany({ instituteId, batchIds: batch._id }, { $pull: { batchIds: batch._id } }),
+      Course.updateMany({ instituteId, batchIds: batch._id }, { $pull: { batchIds: batch._id } }),
+      Material.updateMany({ instituteId, batchIds: batch._id }, { $pull: { batchIds: batch._id } }),
+      Lead.updateMany({ instituteId, demoBatchId: batch._id }, { $unset: { demoBatchId: 1 } }),
+    ]);
+    // Material shared only with this batch has nobody left to see it.
+    const orphans = await Material.find({ instituteId, batchIds: { $size: 0 } }).select('fileId').lean();
+    await Material.deleteMany({ _id: { $in: orphans.map((m) => m._id) } });
+    for (const m of orphans) if (m.fileId && !(await Material.exists({ fileId: m.fileId }))) await deleteFile(m.fileId);
     bumpData(instituteId);
     audit(req, 'batch.delete', 'Batch', batch._id, batch.name);
     res.json({ ok: true });

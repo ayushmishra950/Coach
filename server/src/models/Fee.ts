@@ -13,6 +13,9 @@ const invoiceSchema = new Schema(
     status: { type: String, enum: ['pending', 'partial', 'paid'], default: 'pending' },
     lastReminderAt: Date,
     reminderCount: { type: Number, default: 0 },
+    /** Overdue reminders can go 1–2 times a day: the day (YYYY-MM-DD) and how many were sent that day. */
+    reminderDay: String,
+    reminderDayCount: { type: Number, default: 0 },
   },
   { timestamps: true },
 );

@@ -22,6 +22,24 @@ const testSchema = new Schema(
         remark: String,
       },
     ],
+    /** 'online' = objective (MCQ) test students take in the portal; marks are filled in automatically. */
+    mode: { type: String, enum: ['offline', 'online'], default: 'offline' },
+    questions: [
+      {
+        text: { type: String, required: true },
+        options: [String],
+        correct: { type: Number, required: true }, // index into options
+        marks: { type: Number, default: 1 },
+        explanation: String,
+      },
+    ],
+    /** Marks taken off for each wrong answer (0 = no negative marking). */
+    wrongPenalty: { type: Number, default: 0 },
+    durationMins: { type: Number, default: 30 },
+    opensAt: Date,
+    closesAt: Date,
+    /** Show correct answers to students after they submit (only once results are published). */
+    showAnswers: { type: Boolean, default: true },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     publishedAt: Date,
   },

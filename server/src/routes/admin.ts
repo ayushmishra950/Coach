@@ -11,6 +11,8 @@ import { disconnectInstitute, disconnectUser } from '../services/realtime.js';
 import { monthKey } from '../utils/dates.js';
 import { escapeRegex, generatePassword } from '../utils/security.js';
 import { HttpError, ah, oid, str } from '../utils/http.js';
+import { platformSettings, setDefaultTrialDays } from '../services/platform.js';
+import { localDayStart } from '../utils/dates.js';
 import { pageParams, paged } from '../utils/paginate.js';
 
 const r = Router();
@@ -141,11 +143,27 @@ r.put(
   ah(async (req, res) => {
     const inst = await Institute.findById(oid(req.params.id));
     if (!inst) throw new HttpError(404, 'Institute not found');
-    const { plan, status, extendTrialDays, offlinePayment } = req.body ?? {};
+    const { plan, status, extendTrialDays, trialAdjustDays, trialEndsAt, endTrialNow, trialLengthDays, offlinePayment } = req.body ?? {};
     if (plan && !['starter', 'growth', 'premium'].includes(plan)) throw new HttpError(400, 'Unknown plan');
     if (status && !['trial', 'active', 'past_due', 'cancelled', 'suspended'].includes(status)) throw new HttpError(400, 'Unknown status');
-    const trialDays = extendTrialDays ? Number(extendTrialDays) : 0;
-    if (extendTrialDays && (!Number.isInteger(trialDays) || trialDays < 1 || trialDays > 365)) throw new HttpError(400, 'Trial extension must be 1–365 days');
+    // Trial changes: add / remove days (+7, −5), set an exact last day, or end it now.
+    const trialDays = trialAdjustDays !== undefined && trialAdjustDays !== '' ? Number(trialAdjustDays) : extendTrialDays ? Number(extendTrialDays) : 0;
+    if (trialDays && (!Number.isInteger(trialDays) || trialDays < -365 || trialDays > 365)) throw new HttpError(400, 'Trial change must be between −365 and +365 days');
+    let trialEnd: Date | null = null;
+    if (trialEndsAt) {
+      if (typeof trialEndsAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(trialEndsAt)) throw new HttpError(400, 'Pick the last day of the trial');
+      trialEnd = localDayStart(trialEndsAt);
+      trialEnd.setHours(23, 59, 59, 999);
+      if (trialEnd.getTime() > Date.now() + 730 * 86400000) throw new HttpError(400, 'A trial can run for at most 2 years');
+    }
+    // Total trial length for this coaching (like the default on Plans): N days from the day it joined.
+    let lengthEnd: Date | null = null;
+    if (trialLengthDays !== undefined && trialLengthDays !== null && trialLengthDays !== '') {
+      const n = Number(trialLengthDays);
+      if (!Number.isInteger(n) || n < 0 || n > 730) throw new HttpError(400, 'Trial length must be between 0 and 730 days');
+      const joined = inst.createdAt ? new Date(inst.createdAt) : new Date();
+      lengthEnd = n === 0 ? new Date() : new Date(joined.getTime() + n * 86400000);
+    }
     const before = `${inst.plan}/${inst.status}`;
     if (plan) inst.plan = plan;
     if (status === 'cancelled' && inst.status !== 'cancelled') inst.cancelledAt = new Date();
@@ -160,9 +178,21 @@ r.put(
     if (status === 'active' && (!inst.currentPeriodEnd || inst.currentPeriodEnd < new Date())) {
       inst.currentPeriodEnd = nextPeriodEnd(null, inst.billingCycle === 'yearly' ? 'yearly' : 'monthly');
     }
-    if (trialDays) {
-      const base = inst.trialEndsAt && inst.trialEndsAt > new Date() ? inst.trialEndsAt : new Date();
+    const oldTrialEnd = inst.trialEndsAt;
+    if (endTrialNow) {
+      inst.trialEndsAt = new Date(); // trial over → Starter features until they pick a plan
+    } else if (lengthEnd) {
+      inst.trialEndsAt = lengthEnd;
+    } else if (trialEnd) {
+      inst.trialEndsAt = trialEnd;
+    } else if (trialDays) {
+      // Adding to an expired trial starts from today; removing days counts back from the current end.
+      const base = trialDays > 0 && !(inst.trialEndsAt && inst.trialEndsAt > new Date()) ? new Date() : (inst.trialEndsAt ?? new Date());
       inst.trialEndsAt = new Date(base.getTime() + trialDays * 86400000);
+    }
+    const trialChanged = String(oldTrialEnd ?? '') !== String(inst.trialEndsAt ?? '');
+    // A trial that still has time left puts the account on Trial (unless it was suspended on purpose).
+    if (trialChanged && inst.trialEndsAt && inst.trialEndsAt > new Date() && (!status || status === 'trial') && inst.status !== 'active') {
       inst.status = 'trial';
       clearSuspension(inst);
     }
@@ -179,7 +209,7 @@ r.put(
       });
     }
     if (inst.status === 'suspended') disconnectInstitute(inst._id);
-    auditLog(req, 'institute.update', 'Institute', inst._id, `${before} → ${inst.plan}/${inst.status}${trialDays ? ` · trial +${trialDays}d` : ''}${offlinePayment?.amount ? ` · offline ₹${offlinePayment.amount}` : ''}`, inst._id);
+    auditLog(req, 'institute.update', 'Institute', inst._id, `${before} → ${inst.plan}/${inst.status}${trialChanged ? ` · trial ends ${inst.trialEndsAt ? inst.trialEndsAt.toLocaleDateString('en-IN') : '—'}` : ''}${offlinePayment?.amount ? ` · offline ₹${offlinePayment.amount}` : ''}`, inst._id);
     res.json(inst);
   }),
 );
@@ -254,6 +284,20 @@ r.post(
     disconnectUser(owner._id);
     auditLog(req, 'owner.password_reset', 'User', owner._id, `${owner.email} · ${reason}`, owner.instituteId);
     res.json({ email: owner.email, name: owner.name, password });
+  }),
+);
+
+/** Platform settings: the free-trial length new institutes get. */
+r.get('/settings', ah(async (_req, res) => res.json({ trialDays: (await platformSettings()).trialDays })));
+
+r.put(
+  '/settings',
+  ah(async (req, res) => {
+    const n = Number(req.body?.trialDays);
+    if (!Number.isInteger(n) || n < 0 || n > 365) throw new HttpError(400, 'Trial length must be 0–365 days');
+    await setDefaultTrialDays(n);
+    auditLog(req, 'platform.trial_days', 'Platform', 'platform', `Default free trial → ${n} days`);
+    res.json({ trialDays: n });
   }),
 );
 

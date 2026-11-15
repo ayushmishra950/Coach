@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { Types } from 'mongoose';
 import { allow, assertBatchAccess, auth, scopedBatchIds, tid } from '../middleware/auth.js';
-import { Student, Test } from '../models/index.js';
+import { Student, Test, TestAttempt } from '../models/index.js';
+import { closeExpired } from '../services/onlineTest.js';
 import { audit } from '../services/audit.js';
 import { notifyMany } from '../services/notify.js';
 import { hasFeature } from '../services/plan.js';
@@ -209,6 +210,102 @@ r.put(
   }),
 );
 
+/**
+ * Turn a test into an online objective (MCQ) test, or update its questions / timing.
+ * Max marks become the total of the question marks.
+ */
+r.put(
+  '/:id/online',
+  ah(async (req, res) => {
+    const test = await Test.findOne({ _id: oid(req.params.id), instituteId: tid(req) });
+    if (!test) throw new HttpError(404, 'Test not found');
+    await assertBatchAccess(req, test.batchId);
+    const b = req.body ?? {};
+    if (b.mode === 'offline') {
+      if (await TestAttempt.exists({ testId: test._id })) throw new HttpError(400, 'Students have already attempted this test online');
+      test.mode = 'offline';
+      await test.save();
+      return res.json(test);
+    }
+    const raw: unknown[] = Array.isArray(b.questions) ? b.questions.slice(0, 200) : [];
+    if (!raw.length) throw new HttpError(400, 'Add at least one question');
+    const questions = raw.map((q, i) => {
+      const x = (q ?? {}) as Record<string, unknown>;
+      const text = String(x.text ?? '').trim().slice(0, 2000);
+      const options = (Array.isArray(x.options) ? x.options : []).map((o) => String(o ?? '').trim().slice(0, 500)).filter(Boolean).slice(0, 6);
+      const correct = Number(x.correct);
+      const marks = x.marks === undefined || x.marks === '' ? 1 : Number(x.marks);
+      if (!text) throw new HttpError(400, `Question ${i + 1}: write the question`);
+      if (options.length < 2) throw new HttpError(400, `Question ${i + 1}: give at least 2 options`);
+      if (!Number.isInteger(correct) || correct < 0 || correct >= options.length) throw new HttpError(400, `Question ${i + 1}: pick the correct option`);
+      if (!Number.isFinite(marks) || marks <= 0 || marks > 100) throw new HttpError(400, `Question ${i + 1}: marks must be between 0 and 100`);
+      return { text, options, correct, marks, explanation: String(x.explanation ?? '').trim().slice(0, 1000) || undefined };
+    });
+    const firstTime = test.mode !== 'online' || !test.questions.length;
+    const attempted = await TestAttempt.exists({ testId: test._id, submittedAt: { $ne: null } });
+    if (attempted && questions.length !== test.questions.length) throw new HttpError(400, 'Students have already submitted — you can fix question text or answers, but not add or remove questions.');
+    const total = questions.reduce((a, q) => a + q.marks, 0);
+    const duration = Math.round(Number(b.durationMins ?? test.durationMins ?? 30));
+    if (!Number.isFinite(duration) || duration < 1 || duration > 600) throw new HttpError(400, 'Duration must be 1–600 minutes');
+    const penalty = Number(b.wrongPenalty ?? 0);
+    if (!Number.isFinite(penalty) || penalty < 0 || penalty > 100) throw new HttpError(400, 'Invalid negative marks');
+    const opensAt = b.opensAt ? parseDate(b.opensAt, 'Opens at') : undefined;
+    const closesAt = b.closesAt ? parseDate(b.closesAt, 'Closes at') : undefined;
+    if (opensAt && closesAt && closesAt <= opensAt) throw new HttpError(400, 'The test must close after it opens');
+    test.set({
+      mode: 'online', questions, maxMarks: total, durationMins: duration, wrongPenalty: penalty, opensAt, closesAt,
+      negativeMarking: penalty > 0, showAnswers: b.showAnswers !== false,
+    });
+    await test.save();
+    audit(req, 'test.online_update', 'Test', test._id, `${test.subject}: ${questions.length} questions, ${total} marks`);
+    if (firstTime) {
+      // One in-app note per family in the batch: "New online test — opens …".
+      const when = opensAt && opensAt > new Date() ? ` It opens ${opensAt.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}` : ' It is open now';
+      const students = await Student.find({ instituteId: test.instituteId, batchIds: test.batchId, status: 'active' }).select('_id name parentUserId parentPhone').lean();
+      const seen = new Set<string>();
+      void notifyMany(students.filter((s) => {
+        const fam = String(s.parentUserId ?? s.parentPhone ?? s._id);
+        return !seen.has(fam) && !!seen.add(fam);
+      }).map((s) => ({
+        institute: req.institute!, type: 'test' as const, audience: 'parent' as const, studentId: s._id, skipExternal: true,
+        href: `/portal?student=${s._id}#online-tests`,
+        title: `New online test: ${test.subject}`,
+        message: `${s.name} has an online test — ${test.subject}${test.topic ? ` (${test.topic})` : ''}, ${questions.length} questions, ${duration} min.${when}${closesAt ? `, closes ${closesAt.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}.`,
+      }))).catch(() => undefined);
+    }
+    res.json(test);
+  }),
+);
+
+/** Who has attempted the online test (and who hasn't). */
+r.get(
+  '/:id/attempts',
+  ah(async (req, res) => {
+    const test = await Test.findOne({ _id: oid(req.params.id), instituteId: tid(req) }).select('batchId questions maxMarks').lean();
+    if (!test) throw new HttpError(404, 'Test not found');
+    await assertBatchAccess(req, test.batchId);
+    await closeExpired([test._id]);
+    const [students, attempts] = await Promise.all([
+      Student.find({ instituteId: tid(req), batchIds: test.batchId, status: 'active' }).select('name studentCode').sort({ name: 1 }).lean(),
+      TestAttempt.find({ testId: test._id }).lean(),
+    ]);
+    // Per-question: how many got it right (helps spot a wrong answer key or a weak topic).
+    const submitted = attempts.filter((a) => a.submittedAt);
+    const perQuestion = test.questions.map((q, i) => ({
+      correct: submitted.filter((a) => a.answers[i] === q.correct).length,
+      skipped: submitted.filter((a) => a.answers[i] == null).length,
+    }));
+    res.json({
+      rows: students.map((s) => {
+        const a = attempts.find((x) => String(x.studentId) === String(s._id));
+        return { student: s, startedAt: a?.startedAt ?? null, submittedAt: a?.submittedAt ?? null, score: a?.score ?? null, correct: a?.correct ?? null, wrong: a?.wrong ?? null };
+      }),
+      perQuestion,
+      submitted: submitted.length,
+    });
+  }),
+);
+
 r.post(
   '/:id/publish',
   ah(async (req, res) => {
@@ -255,6 +352,7 @@ r.delete(
     if (!test) throw new HttpError(404, 'Test not found');
     await assertBatchAccess(req, test.batchId);
     await test.deleteOne();
+    await TestAttempt.deleteMany({ testId: test._id });
     bumpData(test.instituteId);
     audit(req, 'test.delete', 'Test', test._id, `${test.subject}${test.topic ? ` — ${test.topic}` : ''} (${test.status}, ${test.results.length} results)`);
     res.json({ ok: true });

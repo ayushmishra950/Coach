@@ -28,30 +28,104 @@ const devLog = (channel: string, to: string, title: string) => {
   if (!config.isProd) console.log(`[${channel} → ${maskContact(to)}] ${title}`);
 };
 
+/** "98765 43210" → "919876543210" (E.164 without +). */
+export function e164(phone: string) {
+  let d = phone.replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  if (d.length === 10) d = config.defaultCountryCode + d;
+  return d;
+}
+
+type Result = { status: 'sent' | 'queued' | 'failed' | 'skipped'; info?: string };
+
+/** POST with a 10 s timeout; any non-2xx becomes a "failed" delivery with the provider's message. */
+async function post(url: string, init: RequestInit): Promise<Result> {
+  try {
+    const r = await fetch(url, { ...init, method: 'POST', signal: AbortSignal.timeout(10_000) });
+    const text = await r.text();
+    if (r.ok) return { status: 'sent' };
+    let msg = text.slice(0, 160);
+    try {
+      const j = JSON.parse(text);
+      msg = j?.error?.message || j?.message || j?.error || msg;
+    } catch {
+      /* not JSON */
+    }
+    return { status: 'failed', info: `${r.status}: ${String(msg).slice(0, 160)}` };
+  } catch (e) {
+    return { status: 'failed', info: (e as Error).name === 'TimeoutError' ? 'Provider timed out' : (e as Error).message.slice(0, 160) };
+  }
+}
+
 const adapters: Record<Channel, ChannelAdapter> = {
   inApp: { send: async () => ({ status: 'sent' }) },
+  /** WhatsApp Business Cloud API (Meta). Set WHATSAPP_TOKEN + WHATSAPP_PHONE_NUMBER_ID (+ WHATSAPP_TEMPLATE). */
   whatsapp: {
-    send: async ({ to, title }) => {
+    send: async ({ to, title, message }) => {
       if (!to) return { status: 'skipped', info: 'No phone number' };
-      devLog('whatsapp', to, title);
-      return { status: 'queued', info: 'Not connected yet' };
+      const w = config.whatsapp;
+      if (!w.token || !w.phoneNumberId) {
+        devLog('whatsapp', to, title);
+        return { status: 'queued', info: 'WhatsApp not connected — set WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID' };
+      }
+      const body = w.template
+        ? {
+            messaging_product: 'whatsapp', to: e164(to), type: 'template',
+            template: { name: w.template, language: { code: w.templateLang }, components: [{ type: 'body', parameters: [{ type: 'text', text: title.slice(0, 200) }, { type: 'text', text: message.replace(/\s+/g, ' ').slice(0, 900) }] }] },
+          }
+        : { messaging_product: 'whatsapp', to: e164(to), type: 'text', text: { body: `*${title}*\n${message}`.slice(0, 4000) } };
+      return post(`https://graph.facebook.com/v20.0/${w.phoneNumberId}/messages`, {
+        headers: { Authorization: `Bearer ${w.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
     },
   },
+  /** Email via Resend (RESEND_API_KEY + EMAIL_FROM). */
   email: {
-    send: async ({ to, title }) => {
+    send: async ({ to, title, message }) => {
       if (!to) return { status: 'skipped', info: 'No email address' };
-      devLog('email', to, title);
-      return { status: 'queued', info: 'Not connected yet — add an email provider in services/notify.ts' };
+      const e = config.email;
+      if (!e.resendKey || !e.from) {
+        devLog('email', to, title);
+        return { status: 'queued', info: 'Email not connected — set RESEND_API_KEY and EMAIL_FROM' };
+      }
+      const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+      return post('https://api.resend.com/emails', {
+        headers: { Authorization: `Bearer ${e.resendKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: e.from, to: [to], subject: title, text: message, html: `<h3>${esc(title)}</h3><p>${esc(message)}</p>` }),
+      });
     },
   },
+  /** SMS via Fast2SMS (India) or Twilio — SMS_PROVIDER=fast2sms | twilio. */
   sms: {
-    send: async ({ to, title }) => {
+    send: async ({ to, title, message }) => {
       if (!to) return { status: 'skipped', info: 'No phone number' };
+      const s = config.sms;
+      const text = `${title}: ${message}`.slice(0, 600);
+      if (s.provider === 'fast2sms' && s.fast2smsKey) {
+        return post('https://www.fast2sms.com/dev/bulkV2', {
+          headers: { authorization: s.fast2smsKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ route: 'q', message: text, numbers: e164(to).slice(-10) }),
+        });
+      }
+      if (s.provider === 'twilio' && s.twilioSid && s.twilioToken && s.twilioFrom) {
+        return post(`https://api.twilio.com/2010-04-01/Accounts/${s.twilioSid}/Messages.json`, {
+          headers: { Authorization: `Basic ${Buffer.from(`${s.twilioSid}:${s.twilioToken}`).toString('base64')}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ To: `+${e164(to)}`, From: s.twilioFrom, Body: text }).toString(),
+        });
+      }
       devLog('sms', to, title);
-      return { status: 'queued', info: 'Not connected yet — add an SMS gateway in services/notify.ts' };
+      return { status: 'queued', info: 'SMS not connected — set SMS_PROVIDER and its API keys' };
     },
   },
 };
+
+/** Which external channels have a provider configured (shown in Settings). */
+export const providerStatus = () => ({
+  whatsapp: !!(config.whatsapp.token && config.whatsapp.phoneNumberId),
+  sms: (config.sms.provider === 'fast2sms' && !!config.sms.fast2smsKey) || (config.sms.provider === 'twilio' && !!(config.sms.twilioSid && config.sms.twilioToken && config.sms.twilioFrom)),
+  email: !!(config.email.resendKey && config.email.from),
+});
 
 // Guard against runaway costs: at most this many paid messages (WhatsApp / SMS / email) per
 // institute per hour, whatever triggers them.
@@ -94,7 +168,7 @@ async function whatsappAllowance(institute: InstituteDoc, limit: number) {
 
 export interface NotifyInput {
   institute: InstituteDoc;
-  type: 'attendance' | 'fee' | 'test' | 'announcement' | 'system' | 'payment';
+  type: 'attendance' | 'fee' | 'test' | 'announcement' | 'system' | 'payment' | 'salary' | 'staff' | 'lead' | 'leave' | 'material' | 'report';
   title: string;
   message: string;
   /** parent = the student's parents, owner = institute owners, staff = teachers (a specific one via userId) */

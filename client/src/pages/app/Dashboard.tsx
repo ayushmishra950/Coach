@@ -5,9 +5,13 @@ import {
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { CheckInCard } from '../../components/CheckInCard';
+import { StaffOverview } from '../../components/StaffOverview';
+import { AdmissionsOverview, TeacherAlerts } from '../../components/AdmissionsOverview';
 import { PremiumCard, UpgradeCard } from '../../components/Upgrade';
 import { Avatar, Badge, Card, CardHeader, ChartTooltip, EmptyState, ErrorState, Progress, Skeleton, StatCard, clsx } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
+import { useSocketEvent } from '../../context/RealtimeContext';
 import { useApi } from '../../hooks/useApi';
 import { fmtDate, fmtDateShort, fmtTime, greeting, inr, inrShort, pctTone, timeAgo } from '../../lib/format';
 import type { Plan } from '../../lib/types';
@@ -19,6 +23,7 @@ interface ClassRow {
 interface AbsentAlert { studentId: string; count: number; since: string; student: { _id: string; name: string; studentCode: string; parentPhone?: string } }
 interface PendingTest { _id: string; subject: string; topic?: string; date: string; batchId: { name: string } }
 interface Common {
+  holiday?: string | null;
   todayAttendance: { present: number; total: number };
   classes: ClassRow[];
   pendingTests: PendingTest[];
@@ -46,6 +51,10 @@ const pctOf = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
 export default function Dashboard() {
   const { session } = useAuth();
   const { data, loading, error, reload } = useApi<OwnerDash | TeacherDash>('/dashboard');
+  // Payments, enquiries and reports change the owner's numbers — refresh quietly when one arrives.
+  useSocketEvent<{ type: string }>('notification:new', (n) => {
+    if (['payment', 'lead', 'leave', 'report', 'staff'].includes(n.type)) reload();
+  });
   const first = session?.user.name.split(' ')[0];
 
   return (
@@ -100,6 +109,9 @@ function OwnerView({ d }: { d: OwnerDash }) {
         <StatCard label="Batches" value={d.counts.batches} icon={<BookOpen className="h-5 w-5" />} tone="sky" hint={`${d.classes.length} classes scheduled today`} />
         <StatCard label="Collected this month" value={inrShort(d.fees.collectedThisMonth)} icon={<Wallet className="h-5 w-5" />} tone="green" hint={<span className="text-amber-600">{inr(d.fees.pendingThisMonth)} pending</span>} />
       </div>
+
+      <AdmissionsOverview />
+      <StaffOverview />
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Attendance today */}
@@ -278,9 +290,13 @@ function OwnerView({ d }: { d: OwnerDash }) {
 
 function TeacherView({ d }: { d: TeacherDash }) {
   const att = pctOf(d.todayAttendance.present, d.todayAttendance.total);
-  const unmarked = d.classes.filter((c) => !c.marked);
+  // On a holiday nobody needs a reminder to mark attendance.
+  const unmarked = d.holiday ? [] : d.classes.filter((c) => !c.marked);
   return (
     <>
+      {d.holiday && <div className="rounded-2xl bg-sky-50 p-4 text-sm font-semibold text-sky-800">🏖️ Today is a holiday — {d.holiday}. Attendance is optional.</div>}
+      <CheckInCard />
+      <TeacherAlerts />
       {unmarked.length > 0 && (
         <Link to={`/app/attendance?batchId=${unmarked[0]._id}`}
           className="flex items-center gap-4 rounded-2xl bg-gradient-to-r from-brand-600 to-violet-600 p-5 text-white shadow-glow transition hover:brightness-110">

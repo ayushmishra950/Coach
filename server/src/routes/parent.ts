@@ -5,9 +5,10 @@ import { config } from '../config.js';
 import { allow, auth, requireFeature } from '../middleware/auth.js';
 import { Announcement, Attendance, Batch, Invoice, Payment, Student, Test } from '../models/index.js';
 import { recordPayment } from '../services/payments.js';
+import { loadInstituteCreds } from '../services/razorpay.js';
 import { hasFeature } from '../services/plan.js';
 import { attendanceByStudent } from '../services/stats.js';
-import { nextClass } from '../utils/dates.js';
+import { nextClass, ymd } from '../utils/dates.js';
 import { HttpError, ah, oid } from '../utils/http.js';
 import { receiptInstitute } from './fees.js';
 
@@ -25,7 +26,7 @@ r.get(
     // Children are loaded in parallel (a family with 3 kids = 1 round of queries, not 3).
     const children = await Promise.all(students.map(async (s) => {
       const [batches, attDocs, tests, invoices, payments] = await Promise.all([
-        Batch.find({ _id: { $in: s.batchIds }, instituteId }).select('name subject days startTime endTime teacherId coTeacherIds').populate('teacherId', 'name').populate('coTeacherIds', 'name').lean(),
+        Batch.find({ _id: { $in: s.batchIds }, instituteId }).select('name subject days startTime endTime teacherId coTeacherIds syllabus').populate('teacherId', 'name').populate('coTeacherIds', 'name').lean(),
         Attendance.find({ instituteId, 'records.studentId': s._id }).select('date batchId records').sort({ date: -1 }).limit(60).populate('batchId', 'name').lean(),
         Test.find({ instituteId, status: 'published', 'results.studentId': s._id })
           .select('subject topic date maxMarks passPercent results')
@@ -37,7 +38,11 @@ r.get(
       ]);
       const results = tests.map((t) => {
         const x = t.results.find((y) => String(y.studentId) === String(s._id))!;
+        const scored = t.results.filter((y) => !y.absent && typeof y.marks === 'number');
+        const rank = x.absent || typeof x.marks !== 'number' ? null : 1 + scored.filter((y) => (y.marks as number) > (x.marks as number)).length;
         return {
+          rank, outOf: scored.length,
+          classAvgPct: scored.length ? Math.round((scored.reduce((a, y) => a + (y.marks as number), 0) / scored.length / t.maxMarks) * 100) : null,
           _id: t._id, subject: t.subject, topic: t.topic, date: t.date, maxMarks: t.maxMarks, marks: x.marks, absent: x.absent, remark: x.remark,
           pct: x.absent || x.marks == null ? null : Math.round((x.marks / t.maxMarks) * 100),
           passPercent: t.passPercent ?? 40,
@@ -51,6 +56,9 @@ r.get(
         batches: batches.map((b) => ({
           _id: b._id, name: b.name, subject: b.subject, days: b.days, startTime: b.startTime, endTime: b.endTime,
           teacher: [(b.teacherId as unknown as { name?: string })?.name, ...((b.coTeacherIds ?? []) as unknown as { name?: string }[]).map((t) => t?.name)].filter(Boolean).join(', '),
+          syllabus: b.syllabus?.length
+            ? { total: b.syllabus.length, done: b.syllabus.filter((t) => t.done).length, recent: b.syllabus.filter((t) => t.done).sort((a, c) => (c.doneAt?.getTime() ?? 0) - (a.doneAt?.getTime() ?? 0)).slice(0, 3).map((t) => t.title), next: b.syllabus.find((t) => !t.done)?.title ?? null }
+            : null,
         })),
         attendance: {
           ...(att.get(String(s._id)) ?? { pct: 0, total: 0, present: 0 }),
@@ -72,8 +80,16 @@ r.get(
       .sort({ pinned: -1, createdAt: -1 })
       .limit(10)
       .lean();
-    const onlinePay = config.demoPayments && (await hasFeature(req.institute!, 'onlinePayments'));
-    res.json({ institute: { name: req.institute!.name, phone: req.institute!.phone, brandColor: req.institute!.brandColor, onlinePay }, children, announcements });
+    const gateway = req.institute!.payments?.enabled && (await loadInstituteCreds(instituteId)) ? 'razorpay' : config.demoPayments ? 'demo' : null;
+    const onlinePay = !!gateway && (await hasFeature(req.institute!, 'onlinePayments'));
+    // Notice board: upcoming holidays (Settings) and dated events (PTM, extra class, exam…).
+    const today = ymd();
+    const holidays = (req.institute!.settings?.holidays ?? []).filter((h) => h.date >= today).slice(0, 10);
+    const events = await Announcement.find({
+      instituteId, staffOnly: { $ne: true }, eventDate: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+      $or: [{ batchIds: { $size: 0 } }, { batchIds: { $in: batchIds } }],
+    }).select('title body category eventDate eventEndDate').sort({ eventDate: 1 }).limit(10).lean();
+    res.json({ institute: { name: req.institute!.name, phone: req.institute!.phone, brandColor: req.institute!.brandColor, onlinePay, gateway: onlinePay ? gateway : null }, children, announcements, holidays, events });
   }),
 );
 

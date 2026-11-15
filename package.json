@@ -2,14 +2,16 @@
   "name": "coachflow",
   "private": true,
   "version": "1.0.0",
-  "description": "CoachFlow — Your Coaching Institute. One Simple Dashboard.",
+  "description": "CoachFlow \u2014 Your Coaching Institute. One Simple Dashboard.",
   "scripts": {
     "install:all": "npm install && npm install --prefix server && npm install --prefix client",
     "dev": "concurrently -n api,web -c magenta,cyan \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
     "build": "npm run build --prefix server && npm run build --prefix client",
     "seed": "npm run seed --prefix server",
     "clean-data": "npm run clean-data --prefix server",
-    "clean-data:preview": "npm run clean-data:preview --prefix server"
+    "clean-data:preview": "npm run clean-data:preview --prefix server",
+    "start": "npm start --prefix server",
+    "typecheck": "npm run typecheck --prefix server && npm run typecheck --prefix client"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

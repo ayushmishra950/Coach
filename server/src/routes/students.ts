@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { Router, type Request } from 'express';
 import { Types } from 'mongoose';
 import { allow, assertStudentAccess, auth, requireFeature, scopedBatchIds, tid } from '../middleware/auth.js';
-import { Attendance, Batch, Institute, Invoice, Payment, Student, Test, User } from '../models/index.js';
+import { Attendance, Batch, Institute, Invoice, Lead, LeaveRequest, Payment, Student, Test, TestAttempt, User } from '../models/index.js';
 import { audit } from '../services/audit.js';
 import { getEffectivePlan } from '../services/plan.js';
 import { inr, nextStudentCode } from '../services/payments.js';
@@ -465,6 +465,9 @@ r.delete(
       Invoice.deleteMany({ instituteId, studentId: student._id }),
       Attendance.updateMany({ instituteId, 'records.studentId': student._id }, { $pull: { records: { studentId: student._id } } }),
       Test.updateMany({ instituteId, 'results.studentId': student._id }, { $pull: { results: { studentId: student._id } } }),
+      LeaveRequest.deleteMany({ instituteId, studentId: student._id }),
+      TestAttempt.deleteMany({ instituteId, studentId: student._id }),
+      Lead.updateMany({ instituteId, studentId: student._id }, { $unset: { studentId: 1 } }),
       ...parents.map((p) => unlinkParent(instituteId, student._id, p._id)),
     ]);
     bumpData(instituteId);

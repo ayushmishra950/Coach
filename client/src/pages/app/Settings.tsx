@@ -8,11 +8,11 @@ import { Button, Card, CardHeader, ErrorState, Input, PageHeader, Select, Skelet
 import { useAuth } from '../../context/AuthContext';
 import { useApi } from '../../hooks/useApi';
 import { TOKEN_KEY, api, errMsg } from '../../lib/api';
-import { fmtDate } from '../../lib/format';
+import { fmtDate, ymd } from '../../lib/format';
 
 interface InstSettings {
   channels: { inApp: boolean; whatsapp: boolean; email: boolean; sms: boolean };
-  reminders: { enabled: boolean; daysBefore: number; onDueDate: boolean; daysAfter: number };
+  reminders: { enabled: boolean; daysBefore: number; onDueDate: boolean; daysAfter: number; overduePerDay: 1 | 2 };
   absentAlertAfter: number;
   notifyParentOnAbsence: boolean;
   receiptPrefix?: string;
@@ -25,7 +25,7 @@ interface InstituteDoc {
   settings: InstSettings;
 }
 
-type TabKey = 'profile' | 'operations' | 'branding' | 'notifications' | 'reminders' | 'account';
+type TabKey = 'profile' | 'operations' | 'branding' | 'notifications' | 'reminders' | 'payments' | 'account';
 
 const GSTIN_RX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const HEX_RX = /^#[0-9a-f]{6}$/i;
@@ -46,7 +46,7 @@ const PRESETS = ['#6366f1', '#8b5cf6', '#d946ef', '#ec4899', '#f43f5e', '#f97316
 
 const DEFAULT_SETTINGS: InstSettings = {
   channels: { inApp: true, whatsapp: false, email: true, sms: false },
-  reminders: { enabled: true, daysBefore: 3, onDueDate: true, daysAfter: 3 },
+  reminders: { enabled: true, daysBefore: 1, onDueDate: true, daysAfter: 1, overduePerDay: 1 },
   absentAlertAfter: 3,
   notifyParentOnAbsence: true,
 };
@@ -205,7 +205,7 @@ export default function Settings() {
     try {
       const res = await api.get<Blob>('/settings/export', { responseType: 'blob' });
       const cd = String(res.headers['content-disposition'] ?? '');
-      const name = /filename="?([^";]+)"?/.exec(cd)?.[1] ?? `coachflow-export-${new Date().toISOString().slice(0, 10)}.json`;
+      const name = /filename="?([^";]+)"?/.exec(cd)?.[1] ?? `coachflow-export-${ymd()}.json`;
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;
@@ -258,6 +258,7 @@ export default function Settings() {
     { value: 'branding', label: <><Palette className="h-4 w-4" /> Branding{!canBrand && <Lock className="h-3 w-3 text-amber-500" />}</> },
     { value: 'notifications', label: <><BellRing className="h-4 w-4" /> Notifications</> },
     { value: 'reminders', label: <><IndianRupee className="h-4 w-4" /> Fee reminders{!canReminders && <Lock className="h-3 w-3 text-amber-500" />}</> },
+    { value: 'payments', label: <><Lock className="h-4 w-4" /> Online payments</> },
     { value: 'account', label: <><UserCircle2 className="h-4 w-4" /> My account</> },
   ];
 
@@ -428,6 +429,7 @@ export default function Settings() {
                   </Row>
                 </div>
                 {!canWhatsapp && <UpgradeCard className="mt-4" compact emoji="💬" title="Reach parents on WhatsApp" text="Send absence alerts, fee reminders and results straight to parents' WhatsApp." cta="Unlock WhatsApp" />}
+                <ProviderStatus />
 
                 <h4 className="mb-3 mt-8 text-sm font-bold text-slate-900">Attendance alerts</h4>
                 <div className="space-y-3">
@@ -462,7 +464,7 @@ export default function Settings() {
                 <CardHeader title="Automatic fee reminders" subtitle="Sent to parents on every enabled channel" icon={<IndianRupee className="h-5 w-5" />} />
                 <Row icon={<BellRing className="h-5 w-5 text-brand-600" />}>
                   <Toggle checked={canReminders && s.reminders.enabled} disabled={!canReminders} onChange={(v) => setRem({ enabled: v })}
-                    label="Enable automatic reminders" description="Reminders run every morning for pending installments" />
+                    label="Enable automatic reminders" description="Sent between 8 AM and 9 PM to parents of students with pending installments" />
                 </Row>
                 <div className={clsx('mt-4 grid gap-4 sm:grid-cols-3', !s.reminders.enabled && 'opacity-50')}>
                   <div className="rounded-2xl border border-slate-200 p-4">
@@ -477,10 +479,19 @@ export default function Settings() {
                     <div className="mt-4"><Toggle checked={s.reminders.onDueDate} disabled={!canReminders || !s.reminders.enabled} onChange={(v) => setRem({ onDueDate: v })} label="Send reminder" /></div>
                   </div>
                   <div className="rounded-2xl border border-slate-200 p-4">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">After due date</p>
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Overdue (until paid)</p>
                     <div className="mt-3 flex items-center gap-2">
-                      <NumInput min={0} max={30} disabled={!canReminders || !s.reminders.enabled} className="input w-20" value={s.reminders.daysAfter} onChange={(n) => setS((x) => ({ ...x, reminders: { ...x.reminders, daysAfter: n } }))} />
-                      <span className="text-sm text-slate-500">days after</span>
+                      <span className="text-sm text-slate-500">Start</span>
+                      <NumInput min={0} max={30} disabled={!canReminders || !s.reminders.enabled} className="input w-16" value={s.reminders.daysAfter} onChange={(n) => setS((x) => ({ ...x, reminders: { ...x.reminders, daysAfter: n } }))} />
+                      <span className="text-sm text-slate-500">day(s) after</span>
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      {([1, 2] as const).map((n) => (
+                        <button key={n} type="button" disabled={!canReminders || !s.reminders.enabled || s.reminders.daysAfter === 0} onClick={() => setRem({ overduePerDay: n })}
+                          className={clsx('rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 disabled:opacity-50', (s.reminders.overduePerDay ?? 1) === n ? 'bg-brand-600 text-white ring-brand-600' : 'bg-white text-slate-600 ring-slate-200')}>
+                          {n === 1 ? 'Once a day' : 'Twice a day'}
+                        </button>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -492,9 +503,7 @@ export default function Settings() {
                         ? `${ordinal(10 - s.reminders.daysBefore)}: friendly reminder`
                         : `${s.reminders.daysBefore} days before: friendly reminder`),
                       s.reminders.onDueDate && '10th: due today',
-                      s.reminders.daysAfter > 0 && (10 + s.reminders.daysAfter <= 31
-                        ? `${ordinal(10 + s.reminders.daysAfter)}: overdue notice`
-                        : `${s.reminders.daysAfter} days after: overdue notice`),
+                      s.reminders.daysAfter > 0 && `${10 + s.reminders.daysAfter <= 31 ? `from the ${ordinal(10 + s.reminders.daysAfter)}` : `${s.reminders.daysAfter} days after`}: overdue notice ${(s.reminders.overduePerDay ?? 1) === 2 ? 'twice' : 'once'} every day until paid`,
                     ].filter(Boolean).join('  →  ') || 'No reminders will be sent.' : 'Reminders are turned off.'}
                   </p>
                 </div>
@@ -502,6 +511,8 @@ export default function Settings() {
               </Card>
             </div>
           )}
+
+          {tab === 'payments' && <PaymentsCard />}
 
           {tab === 'account' && (
             <div className="grid gap-6 lg:grid-cols-2">
@@ -537,5 +548,76 @@ export default function Settings() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Which WhatsApp / SMS / email / payment providers are connected in server/.env. */
+function ProviderStatus() {
+  const { data } = useApi<{ whatsapp: boolean; sms: boolean; email: boolean; razorpay: boolean }>('/settings/providers');
+  if (!data) return null;
+  const item = (on: boolean, label: string, env: string) => (
+    <li className="flex items-center justify-between gap-2 py-1.5">
+      <span className="text-sm text-slate-700">{label}</span>
+      {on ? <span className="text-xs font-bold text-emerald-600">● Connected</span> : <span className="text-xs text-slate-400" title={env}>Not connected · set {env.split(',')[0]}…</span>}
+    </li>
+  );
+  return (
+    <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-3">
+      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Message & payment providers (server)</p>
+      <ul className="mt-1 divide-y divide-slate-200/70">
+        {item(data.whatsapp, 'WhatsApp (Meta Cloud API)', 'WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID')}
+        {item(data.sms, 'SMS (Fast2SMS / Twilio)', 'SMS_PROVIDER + keys')}
+        {item(data.email, 'Email (Resend)', 'RESEND_API_KEY, EMAIL_FROM')}
+        {item(data.razorpay, 'Online fee payment (your Razorpay)', 'keys in the Online payments tab')}
+      </ul>
+      <p className="mt-1 text-[11px] text-slate-400">Until a provider is connected, messages on that channel stay "queued" — in-app notifications always work.</p>
+    </div>
+  );
+}
+
+/**
+ * The institute's own Razorpay account: parents' "Pay now" money goes straight to the institute.
+ * Keys are verified with Razorpay before saving; the secret is stored encrypted and never shown again.
+ */
+function PaymentsCard() {
+  const inst = useApi<{ payments?: { enabled?: boolean; razorpayKeyId?: string } }>('/settings');
+  const prov = useApi<{ razorpay: boolean }>('/settings/providers');
+  const [keyId, setKeyId] = useState('');
+  const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setKeyId(inst.data?.payments?.razorpayKeyId ?? ''); }, [inst.data]);
+  const connected = !!prov.data?.razorpay;
+
+  const save = async (enabled: boolean) => {
+    setBusy(true);
+    try {
+      await api.put('/settings/payments', enabled ? { enabled: true, keyId: keyId.trim(), keySecret: secret || undefined } : { enabled: false });
+      toast.success(enabled ? 'Razorpay connected — parents can now pay online' : 'Online payment turned off');
+      setSecret('');
+      inst.reload();
+      prov.reload();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader title="Online fee payment (Razorpay)" subtitle="Parents pay by UPI, debit / credit card or net banking from the parent portal. Money goes straight to your bank account." icon={<IndianRupee className="h-5 w-5" />} />
+      <div className={clsx('mb-4 rounded-xl px-4 py-3 text-sm font-semibold', connected ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-50 text-slate-600')}>
+        {connected ? `● Connected (${keyId.startsWith('rzp_test') ? 'TEST mode — no real money' : 'LIVE'})` : '○ Not connected — parents see "Pay at the institute"'}
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Input label="Key ID" value={keyId} onChange={(e) => setKeyId(e.target.value)} placeholder="rzp_live_XXXXXXXXXXXX" />
+        <Input label="Key Secret" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={connected ? '•••••••• (saved — enter only to change)' : 'Key secret'} autoComplete="off" />
+      </div>
+      <p className="mt-3 text-xs text-slate-500">Get them from Razorpay Dashboard → Account & Settings → API Keys. Use <b>rzp_test_…</b> keys first to try it safely. Online payment also needs a plan with “Online payments”.</p>
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
+        {connected && <Button variant="secondary" loading={busy} onClick={() => save(false)}>Turn off</Button>}
+        <Button loading={busy} disabled={!keyId.trim() || (!connected && !secret)} onClick={() => save(true)}>{connected ? 'Update keys' : 'Connect Razorpay'}</Button>
+      </div>
+    </Card>
   );
 }

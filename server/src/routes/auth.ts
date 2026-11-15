@@ -6,7 +6,7 @@ import { config } from '../config.js';
 import { effectivePlanKey, getPlan, trialDaysLeft } from '../services/plan.js';
 import { disconnectUser } from '../services/realtime.js';
 import { HttpError, ah, required } from '../utils/http.js';
-import { addDays } from '../utils/dates.js';
+import { newTrialEnd } from '../services/platform.js';
 import { isEmail, PHONE_RX, assertPassword, cleanName, createFailureGuard, optStr, rateLimit } from '../utils/security.js';
 
 const r = Router();
@@ -85,7 +85,7 @@ r.post(
       logoText: String(instituteName).slice(0, 2).toUpperCase(),
       plan: 'premium',
       status: 'trial',
-      trialEndsAt: addDays(new Date(), 30),
+      trialEndsAt: await newTrialEnd(), // length set by the Super Admin (default 30 days)
     });
     const user = await User.create({
       name: ownerName,

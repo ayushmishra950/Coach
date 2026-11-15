@@ -17,7 +17,7 @@ type Channel = Notification['deliveries'][number]['channel'];
 type DStatus = Notification['deliveries'][number]['status'];
 type Filter = 'all' | 'unread' | NType;
 
-const TYPE_LABEL: Record<NType, string> = { attendance: 'Attendance', fee: 'Fees', payment: 'Payments', test: 'Tests', announcement: 'Announcements', system: 'System' };
+const TYPE_LABEL: Record<NType, string> = { attendance: 'Attendance', fee: 'Fees', payment: 'Payments', test: 'Tests', announcement: 'Announcements', system: 'System', salary: 'Salary', staff: 'Staff check-in', lead: 'Enquiries', leave: 'Leave', material: 'Study material', report: 'Work reports' };
 const CHANNELS: { key: Channel; label: string; icon: LucideIcon; cls: string }[] = [
   { key: 'inApp', label: 'In-app', icon: Bell, cls: 'bg-brand-50 text-brand-600' },
   { key: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, cls: 'bg-green-50 text-green-600' },

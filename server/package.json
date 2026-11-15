@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "NODE_ENV=production node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js --production",
     "seed": "tsx src/seed.ts --force",
     "clean-data": "tsx src/cleanData.ts --yes",
     "clean-data:preview": "tsx src/cleanData.ts",

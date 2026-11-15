@@ -61,11 +61,13 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // geolocation=(self): teachers may share location on check-in (Staff check-in → Timings).
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
   // The API only ever returns JSON; the built React app gets a strict policy of its own.
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    // Razorpay Checkout (parent fee payment) loads its script and payment window from razorpay.com.
+    "default-src 'self'; script-src 'self' https://checkout.razorpay.com https://*.razorpay.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' ws: wss: https://*.razorpay.com; frame-src https://*.razorpay.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
   );
   if (_req.secure || process.env.NODE_ENV === 'production') res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   // Authenticated API responses must never be cached by browsers or shared proxies.

@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import mongoose from 'mongoose';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { connectDB, ensureJwtSecret } from './db.js';
 import { Institute, User } from './models/index.js';
 import admin from './routes/admin.js';
@@ -20,9 +21,18 @@ import fees from './routes/fees.js';
 import insights from './routes/insights.js';
 import notifications from './routes/notifications.js';
 import parent from './routes/parent.js';
+import parentExtra from './routes/parentExtra.js';
+import { appParent, publicPay } from './routes/mobile.js';
+import workReports from './routes/workReports.js';
+import academics from './routes/academics.js';
+import files, { publicFiles } from './routes/files.js';
+import leads from './routes/leads.js';
+import site, { publicSite } from './routes/site.js';
 import publicRoutes from './routes/public.js';
 import reports from './routes/reports.js';
+import salaries from './routes/salaries.js';
 import settings from './routes/settings.js';
+import staff from './routes/staff.js';
 import students from './routes/students.js';
 import subscription from './routes/subscription.js';
 import teachers from './routes/teachers.js';
@@ -31,6 +41,8 @@ import { seed } from './seed.js';
 import { ensurePlans } from './services/plan.js';
 import { initRealtime } from './services/realtime.js';
 import { startReminderScheduler } from './services/reminders.js';
+import { startSalaryScheduler } from './services/salary.js';
+import { newTrialEnd } from './services/platform.js';
 import { errorHandler } from './utils/http.js';
 import { compressJson, flatQueryParser, rateLimit, securityHeaders, staticGzip } from './utils/security.js';
 
@@ -47,6 +59,10 @@ app.use(express.json({ limit: '100kb' }));
 app.use('/api', rateLimit({ windowMs: 60_000, max: 600, message: 'Too many requests. Please slow down and try again shortly.' }));
 app.use('/api', compressJson);
 
+app.use('/api/files', files);
+app.use('/api/public/files', publicFiles);
+app.use('/api/public/site', publicSite);
+app.use('/api/public/pay', publicPay);
 app.use('/api/public', publicRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', dashboard);
@@ -63,8 +79,16 @@ app.use('/api/insights', insights);
 app.use('/api/subscription', subscription);
 app.use('/api/settings', settings);
 app.use('/api/parent', parent);
+app.use('/api/parent', parentExtra);
+app.use('/api/parent', appParent);
+app.use('/api/academics', academics);
+app.use('/api/leads', leads);
+app.use('/api/website', site);
 app.use('/api/admin', admin);
 app.use('/api/chat', chat);
+app.use('/api/salaries', salaries);
+app.use('/api/staff-attendance', staff);
+app.use('/api/work-reports', workReports);
 app.get('/api/health', (_req, res) => {
   res.status(200).json({
     status: 'success',
@@ -75,7 +99,8 @@ app.get('/api/health', (_req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ message: 'Not found' }));
 
 // Serve the built React app in production
-const clientDist = path.resolve(process.cwd(), '../server/client_build');
+// dist/index.js (or src/index.ts in dev) → ../client_build, whatever folder the server was started from.
+const clientDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client_build');
 if (fs.existsSync(clientDist)) {
   app.use(staticGzip(clientDist));
   // Hashed build files never change → cache for a year; index.html is always re-checked.
@@ -101,6 +126,7 @@ async function main() {
   }
   await syncConfiguredAccounts().catch((e) => console.error('[accounts]', e?.message));
   startReminderScheduler();
+  startSalaryScheduler();
   const server = http.createServer(app);
   const io = initRealtime(server);
   server.listen(config.port, () => console.log(`🚀 CoachFlow API running on http://localhost:${config.port} (time zone ${config.timezone})`));
@@ -158,7 +184,7 @@ async function syncConfiguredAccounts() {
           logoText: instituteName.slice(0, 2).toUpperCase(),
           plan: 'premium',
           status: 'trial',
-          trialEndsAt: new Date(Date.now() + 30 * 86400000),
+          trialEndsAt: await newTrialEnd(),
         });
         await User.create({ name: ownerName, email, password: await bcrypt.hash(password, 10), role, instituteId: institute._id });
         return console.log(`✓ Owner created: ${email} (institute "${instituteName}")`);

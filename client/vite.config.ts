@@ -4,6 +4,9 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   build: {
+    // The API server serves the built app from server/client_build (see server/src/index.ts).
+    outDir: '../server/client_build',
+    emptyOutDir: true,
     rollupOptions: {
       output: {
         // Big libraries in their own long-cached chunks; charts load only on pages that draw them.

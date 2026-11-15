@@ -59,7 +59,7 @@ export interface TestItem {
 }
 
 export interface Notification {
-  _id: string; type: 'attendance' | 'fee' | 'test' | 'announcement' | 'system' | 'payment'; title: string; message: string;
+  _id: string; type: 'attendance' | 'fee' | 'test' | 'announcement' | 'system' | 'payment' | 'salary' | 'staff' | 'lead' | 'leave' | 'material' | 'report'; title: string; message: string;
   audience: 'owner' | 'staff' | 'parent'; studentId?: { _id: string; name: string } | string | null; href?: string; read?: boolean; createdAt: string;
   deliveries: { channel: 'inApp' | 'whatsapp' | 'email' | 'sms'; to?: string; status: 'sent' | 'queued' | 'failed' | 'skipped'; info?: string }[];
 }

@@ -12,6 +12,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Pager } from '../../components/Pager';
 import { useApi, usePagedApi } from '../../hooks/useApi';
 import { api, errMsg } from '../../lib/api';
+import { subscribeWithRazorpay } from '../../lib/razorpay';
 import { FEATURE_INFO } from '../../lib/features';
 import { fmtDate, fmtDateTime, inr, timeAgo } from '../../lib/format';
 import type { Plan, PlanKey } from '../../lib/types';
@@ -21,7 +22,7 @@ interface SubPayment { _id: string; plan: PlanKey; cycle: Cycle; amount: number;
 interface SubData {
   plan: PlanKey; effectivePlan: PlanKey; status: 'trial' | 'active' | 'past_due' | 'cancelled' | 'suspended'; billingCycle: Cycle;
   trialEndsAt?: string; trialDaysLeft: number | null; currentPeriodEnd?: string; cancelAtPeriodEnd?: boolean;
-  usage: { students: number; teachers: number }; plans: Plan[]; history: SubPayment[]; paymentsEnabled?: boolean;
+  usage: { students: number; teachers: number }; plans: Plan[]; history: SubPayment[]; paymentsEnabled?: boolean; gateway?: 'razorpay' | 'demo' | null;
 }
 interface Ticket { _id: string; subject: string; message: string; priority: 'low' | 'normal' | 'high'; status: 'open' | 'in_progress' | 'resolved'; replies: { by: string; text: string; at: string }[]; createdAt: string }
 
@@ -92,11 +93,18 @@ export default function Subscription() {
     if (!checkout) return;
     setPaying(true);
     try {
-      const { data: res } = await api.post('/subscription/checkout', { plan: checkout.key, cycle: activeCycle });
-      setSuccess(res);
+      if (data.gateway === 'razorpay') {
+        // Real payment through Razorpay; the plan switches on after the server verifies it.
+        const res = await subscribeWithRazorpay(checkout.key, activeCycle);
+        if (!res) return;
+        setSuccess({ reference: res.reference, amount: res.amount, plan: checkout.key, currentPeriodEnd: res.currentPeriodEnd ?? '' });
+      } else {
+        const { data: res } = await api.post('/subscription/checkout', { plan: checkout.key, cycle: activeCycle });
+        setSuccess(res);
+      }
       await Promise.all([refresh(), reload()]);
     } catch (e) {
-      toast.error(errMsg(e));
+      toast.error(errMsg(e, (e as Error)?.message));
     } finally {
       setPaying(false);
     }

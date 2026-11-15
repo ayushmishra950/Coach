@@ -8,3 +8,5 @@ export * from './Fee.js';
 export * from './Test.js';
 export * from './Misc.js';
 export * from './Chat.js';
+export * from './Staff.js';
+export * from './Academy.js';

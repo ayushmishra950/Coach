@@ -1,6 +1,8 @@
 import 'dotenv/config';
 
-const isProd = process.env.NODE_ENV === 'production';
+// `npm start` passes --production (works on Windows too, where NODE_ENV=… in a script fails).
+const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--production');
+if (isProd) process.env.NODE_ENV = 'production';
 
 // All "today", due-date and attendance-date logic runs in the institute's local time zone,
 // not in whatever zone the server happens to be deployed in (most clouds default to UTC).
@@ -75,6 +77,32 @@ export const config = {
   demoPayments: flag('DEMO_PAYMENTS', localDemo) && !isProd,
   /** Behind Nginx / a load balancer, set TRUST_PROXY=true so rate limits see the real client IP. */
   trustProxy: trustHops,
+  /** CoachFlow's own Razorpay account, for plan subscriptions. (Parent fees use each institute's keys.) */
+  razorpay: {
+    keyId: (process.env.RAZORPAY_KEY_ID || '').trim(),
+    keySecret: (process.env.RAZORPAY_KEY_SECRET || '').trim(),
+  },
+  /** Message providers. Leave empty to keep a channel "queued" (in-app always works). */
+  whatsapp: {
+    token: (process.env.WHATSAPP_TOKEN || '').trim(),
+    phoneNumberId: (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim(),
+    /** Approved template with 2 body variables ({{1}} = title, {{2}} = message). Needed for business-initiated messages. */
+    template: (process.env.WHATSAPP_TEMPLATE || '').trim(),
+    templateLang: (process.env.WHATSAPP_TEMPLATE_LANG || 'en').trim(),
+  },
+  sms: {
+    provider: (process.env.SMS_PROVIDER || '').trim().toLowerCase(), // 'fast2sms' | 'twilio'
+    fast2smsKey: (process.env.FAST2SMS_API_KEY || '').trim(),
+    twilioSid: (process.env.TWILIO_ACCOUNT_SID || '').trim(),
+    twilioToken: (process.env.TWILIO_AUTH_TOKEN || '').trim(),
+    twilioFrom: (process.env.TWILIO_FROM || '').trim(),
+  },
+  email: {
+    resendKey: (process.env.RESEND_API_KEY || '').trim(),
+    from: (process.env.EMAIL_FROM || '').trim(),
+  },
+  /** Country code added to 10-digit phone numbers for WhatsApp / SMS. */
+  defaultCountryCode: (process.env.DEFAULT_COUNTRY_CODE || '91').replace(/\D/g, ''),
   /** Days a paid plan keeps working after its period ends, before falling back to Starter. */
   graceDays: Number.isFinite(Number(process.env.BILLING_GRACE_DAYS)) && process.env.BILLING_GRACE_DAYS ? Number(process.env.BILLING_GRACE_DAYS) : 3,
 };

@@ -19,7 +19,7 @@ r.use(
   }),
 );
 
-const TYPES = ['attendance', 'fee', 'test', 'announcement', 'system', 'payment'];
+const TYPES = ['attendance', 'fee', 'test', 'announcement', 'system', 'payment', 'salary', 'staff', 'lead', 'leave', 'material', 'report'];
 
 function scopeQuery(req: Parameters<typeof tid>[0]) {
   const instituteId = tid(req);

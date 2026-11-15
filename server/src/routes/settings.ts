@@ -1,9 +1,13 @@
 import { Router } from 'express';
 import { allow, auth, tid } from '../middleware/auth.js';
-import { Announcement, Attendance, Batch, Invoice, Payment, Student, Test, User } from '../models/index.js';
+import { Announcement, Attendance, Batch, Invoice, Payment, Salary, StaffAttendance, Student, Test, User } from '../models/index.js';
 import { audit } from '../services/audit.js';
+import { providerStatus } from '../services/notify.js';
+import { checkKeys, decryptSecret, encryptSecret, loadInstituteCreds, platformCreds } from '../services/razorpay.js';
+import { Institute } from '../models/index.js';
 import { hasFeature } from '../services/plan.js';
 import { HttpError, ah } from '../utils/http.js';
+import { ymd } from '../utils/dates.js';
 import { isEmail, HEX_COLOR_RX, PHONE_RX, cleanName, optStr, rateLimit } from '../utils/security.js';
 
 const r = Router();
@@ -12,7 +16,48 @@ r.use(auth, allow('owner'));
 const GSTIN_RX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 
-r.get('/', ah(async (req, res) => res.json(req.institute)));
+/** The institute document without the encrypted payment secret. */
+function publicInstitute(inst: NonNullable<Express.Request['institute']>) {
+  const o = inst.toObject() as Record<string, unknown> & { payments?: Record<string, unknown> };
+  // The encrypted secret is never loaded here (select: false); only show what is safe.
+  if (o.payments) o.payments = { enabled: !!o.payments.enabled, razorpayKeyId: o.payments.razorpayKeyId ?? '' };
+  return o;
+}
+
+r.get('/', ah(async (req, res) => res.json(publicInstitute(req.institute!))));
+
+/** Which message / payment providers are connected on the server (set in server/.env). */
+r.get('/providers', ah(async (req, res) => res.json({ ...providerStatus(), razorpay: !!(await loadInstituteCreds(tid(req))), platformRazorpay: !!platformCreds() })));
+
+/**
+ * The institute's own Razorpay account for parent fee payments (money goes straight to the
+ * institute). Keys are checked with Razorpay before saving; the secret is stored encrypted.
+ */
+r.put(
+  '/payments',
+  ah(async (req, res) => {
+    // Fresh copy including the stored (encrypted) secret.
+    const inst = (await Institute.findById(tid(req)).select('+payments.razorpaySecretEnc'))!;
+    const b = req.body ?? {};
+    if (b.enabled === false) {
+      inst.set('payments.enabled', false);
+      await inst.save();
+      audit(req, 'settings.payments', 'Institute', inst._id, 'online fee payment turned off');
+      return res.json({ enabled: false, razorpayKeyId: inst.payments?.razorpayKeyId ?? '', hasSecret: !!inst.payments?.razorpaySecretEnc });
+    }
+    const keyId = String(b.keyId ?? inst.payments?.razorpayKeyId ?? '').trim();
+    if (!/^rzp_(test|live)_[A-Za-z0-9]{8,32}$/.test(keyId)) throw new HttpError(400, 'Key ID should look like rzp_live_XXXXXXXX (Razorpay Dashboard → Settings → API Keys)');
+    const secret = typeof b.keySecret === 'string' && b.keySecret.trim() ? b.keySecret.trim() : null;
+    const current = inst.payments?.razorpaySecretEnc && inst.payments.razorpayKeyId === keyId ? await loadInstituteCreds(inst._id) : null;
+    const keySecret = secret ?? current?.keySecret ?? (inst.payments?.razorpaySecretEnc && inst.payments.razorpayKeyId === keyId ? decryptSecret(inst.payments.razorpaySecretEnc) : null);
+    if (!keySecret) throw new HttpError(400, 'Enter the Key Secret');
+    await checkKeys({ keyId, keySecret }); // throws a clear error when the keys are wrong
+    inst.set('payments', { enabled: true, razorpayKeyId: keyId, razorpaySecretEnc: secret ? encryptSecret(secret) : inst.payments?.razorpaySecretEnc });
+    await inst.save();
+    audit(req, 'settings.payments', 'Institute', inst._id, `Razorpay ${keyId.startsWith('rzp_test') ? 'TEST' : 'LIVE'} keys connected`);
+    res.json({ enabled: true, razorpayKeyId: keyId, hasSecret: true, mode: keyId.startsWith('rzp_test') ? 'test' : 'live' });
+  }),
+);
 
 r.put(
   '/',
@@ -76,6 +121,11 @@ r.put(
           if (!Number.isFinite(n)) throw new HttpError(400, 'Reminder days must be a number');
           inst.set(`settings.reminders.${k}`, Math.max(0, Math.min(30, Math.round(n))));
         }
+        if (s.reminders.overduePerDay !== undefined) {
+          const n = Number(s.reminders.overduePerDay);
+          if (n !== 1 && n !== 2) throw new HttpError(400, 'Overdue reminders can go once or twice a day');
+          inst.set('settings.reminders.overduePerDay', n);
+        }
       }
       if (s.absentAlertAfter !== undefined) {
         const n = Number(s.absentAlertAfter);
@@ -106,7 +156,7 @@ r.put(
     }
     await inst.save();
     audit(req, 'settings.update', 'Institute', inst._id, changed.join(', '));
-    res.json(inst);
+    res.json(publicInstitute(inst));
   }),
 );
 
@@ -120,10 +170,10 @@ r.get(
   ah(async (req, res) => {
     const instituteId = tid(req);
     const inst = req.institute!;
-    const stamp = new Date().toISOString().slice(0, 10);
+    const stamp = ymd();
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="coachflow-export-${stamp}.json"`);
-    res.write(`{"exportedAt":${JSON.stringify(new Date())},"institute":${JSON.stringify(inst.toObject())}`);
+    res.write(`{"exportedAt":${JSON.stringify(new Date())},"institute":${JSON.stringify(publicInstitute(inst))}`);
 
     const collections: [string, () => AsyncIterable<unknown>][] = [
       ['staffAndParents', () => User.find({ instituteId }).select('-password -tokenVersion').lean().cursor()],
@@ -134,6 +184,8 @@ r.get(
       ['invoices', () => Invoice.find({ instituteId }).lean().cursor()],
       ['payments', () => Payment.find({ instituteId }).sort({ paidAt: 1 }).lean().cursor()],
       ['announcements', () => Announcement.find({ instituteId }).lean().cursor()],
+      ['staffAttendance', () => StaffAttendance.find({ instituteId }).sort({ date: 1 }).lean().cursor()],
+      ['salaries', () => Salary.find({ instituteId }).sort({ month: 1 }).lean().cursor()],
     ];
     // Stop reading from MongoDB as soon as the browser goes away.
     let gone = false;

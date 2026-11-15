@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 import { allow, auth, tid } from '../middleware/auth.js';
 import { Plan, Student, SubscriptionPayment, SupportTicket, User } from '../models/index.js';
 import { config } from '../config.js';
+import { createOrder, fetchOrder, platformCreds, verifySignature } from '../services/razorpay.js';
+import type { InstituteDoc } from '../models/index.js';
 import { effectivePlanKey, nextPeriodEnd, trialDaysLeft } from '../services/plan.js';
 import { audit } from '../services/audit.js';
 import { HttpError, ah, oid, required, str } from '../utils/http.js';
@@ -31,10 +33,71 @@ r.get(
       currentPeriodEnd: inst.currentPeriodEnd,
       cancelAtPeriodEnd: !!inst.cancelAtPeriodEnd,
       usage: { students, teachers },
-      paymentsEnabled: config.demoPayments,
+      paymentsEnabled: config.demoPayments || !!platformCreds(),
+      gateway: platformCreds() ? 'razorpay' : config.demoPayments ? 'demo' : null,
       plans,
       history,
     });
+  }),
+);
+
+/** Checks the plan fits the institute's current size. */
+async function planFor(inst: InstituteDoc, body: Record<string, unknown>) {
+  required(body ?? {}, ['plan', 'cycle']);
+  const plan = await Plan.findOne({ key: str(body.plan) ?? '' }).lean();
+  if (!plan) throw new HttpError(400, 'Unknown plan');
+  const cycle: 'monthly' | 'yearly' = body.cycle === 'yearly' ? 'yearly' : 'monthly';
+  const [students, teachers] = await Promise.all([
+    Student.countDocuments({ instituteId: inst._id, status: 'active' }),
+    User.countDocuments({ instituteId: inst._id, role: 'teacher', active: true }),
+  ]);
+  if (students > plan.studentLimit) throw new HttpError(400, `You have ${students} active students — the ${plan.name} plan allows ${plan.studentLimit}.`);
+  if (teachers > plan.teacherLimit) throw new HttpError(400, `You have ${teachers} teachers — the ${plan.name} plan allows ${plan.teacherLimit}.`);
+  return { plan, cycle, amount: cycle === 'yearly' ? plan.priceYearly : plan.priceMonthly };
+}
+
+/** Switches the plan on after a successful payment. Renewing early keeps the days already paid for. */
+async function activate(inst: InstituteDoc, planKey: string, cycle: 'monthly' | 'yearly') {
+  const end = nextPeriodEnd(inst.status === 'active' || inst.status === 'past_due' ? inst.currentPeriodEnd : null, cycle);
+  inst.set({ plan: planKey, billingCycle: cycle, status: 'active', currentPeriodEnd: end, cancelAtPeriodEnd: false });
+  await inst.save();
+  return end;
+}
+
+/** Real payment for a plan: Razorpay order on the CoachFlow account (RAZORPAY_KEY_ID / _SECRET in .env). */
+r.post(
+  '/order',
+  ah(async (req, res) => {
+    const creds = platformCreds();
+    if (!creds) throw new HttpError(503, 'Online payment is not set up yet. Please contact CoachFlow support to upgrade your plan.');
+    const inst = req.institute!;
+    const { plan, cycle, amount } = await planFor(inst, req.body);
+    const order = await createOrder(creds, amount, `sub_${String(inst._id).slice(-10)}_${Date.now().toString(36)}`, { instituteId: String(inst._id), plan: plan.key, cycle });
+    res.json({ keyId: creds.keyId, orderId: order.id, amount: order.amount, currency: order.currency, name: 'CoachFlow', description: `${plan.name} plan · ${cycle}`, prefill: { name: req.user.name, email: req.user.email } });
+  }),
+);
+
+r.post(
+  '/verify',
+  ah(async (req, res) => {
+    const creds = platformCreds();
+    if (!creds) throw new HttpError(503, 'Online payment is not set up');
+    const inst = req.institute!;
+    const orderId = str(req.body?.razorpay_order_id);
+    const paymentId = str(req.body?.razorpay_payment_id);
+    const signature = str(req.body?.razorpay_signature);
+    if (!orderId || !paymentId || !signature || !verifySignature(creds, orderId, paymentId, signature)) throw new HttpError(400, 'Payment could not be verified');
+    if (await SubscriptionPayment.exists({ reference: paymentId })) return res.json({ ok: true, already: true });
+    const order = await fetchOrder(creds, orderId);
+    if (order.notes?.instituteId !== String(inst._id)) throw new HttpError(400, 'Payment does not match this account');
+    const cycle = order.notes?.cycle === 'yearly' ? 'yearly' : 'monthly';
+    const plan = await Plan.findOne({ key: order.notes?.plan ?? '' }).lean();
+    if (!plan) throw new HttpError(400, 'Unknown plan');
+    const amount = Math.round(order.amount / 100);
+    await SubscriptionPayment.create({ instituteId: inst._id, plan: plan.key, cycle, amount, status: 'success', reference: paymentId });
+    const end = await activate(inst, plan.key, cycle);
+    audit(req, 'subscription.razorpay', 'Institute', inst._id, `${plan.name} ${cycle} ₹${amount} · ${paymentId}`);
+    res.json({ ok: true, reference: paymentId, amount, plan: plan.key, cycle, currentPeriodEnd: end });
   }),
 );
 
@@ -49,30 +112,11 @@ r.post(
     if (!config.demoPayments) {
       throw new HttpError(503, 'Online payment is not set up yet. Please contact CoachFlow support to upgrade your plan.');
     }
-    required(req.body ?? {}, ['plan', 'cycle']);
-    const plan = await Plan.findOne({ key: str(req.body.plan) ?? '' }).lean();
-    if (!plan) throw new HttpError(400, 'Unknown plan');
-    const cycle = req.body.cycle === 'yearly' ? 'yearly' : 'monthly';
-    const [students, teachers] = await Promise.all([
-      Student.countDocuments({ instituteId: inst._id, status: 'active' }),
-      User.countDocuments({ instituteId: inst._id, role: 'teacher', active: true }),
-    ]);
-    if (students > plan.studentLimit) throw new HttpError(400, `You have ${students} active students — the ${plan.name} plan allows ${plan.studentLimit}.`);
-    if (teachers > plan.teacherLimit) throw new HttpError(400, `You have ${teachers} teachers — the ${plan.name} plan allows ${plan.teacherLimit}.`);
-
-    // ── PAYMENT GATEWAY (demo) ──
-    const amount = cycle === 'yearly' ? plan.priceYearly : plan.priceMonthly;
+    const { plan, cycle, amount } = await planFor(inst, req.body);
+    // ── Demo gateway (local demo mode only) ──
     const reference = 'pay_' + crypto.randomBytes(7).toString('hex');
     await SubscriptionPayment.create({ instituteId: inst._id, plan: plan.key, cycle, amount, status: 'success', reference });
-
-    // Renewing early keeps the days already paid for.
-    const end = nextPeriodEnd(inst.status === 'active' || inst.status === 'past_due' ? inst.currentPeriodEnd : null, cycle);
-    inst.plan = plan.key;
-    inst.billingCycle = cycle;
-    inst.status = 'active';
-    inst.currentPeriodEnd = end;
-    inst.cancelAtPeriodEnd = false;
-    await inst.save();
+    const end = await activate(inst, plan.key, cycle);
     audit(req, 'subscription.checkout', 'Institute', inst._id, `${plan.name} ${cycle} ₹${amount}`);
     res.json({ ok: true, reference, amount, plan: plan.key, cycle, currentPeriodEnd: end });
   }),
